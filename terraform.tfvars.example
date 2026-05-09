@@ -1,0 +1,22 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# terraform.tfvars is gitignored by default — do not commit it.
+
+# Required: your Hetzner Cloud API token
+# Generate at: https://console.hetzner.cloud → (project) → Security → API Tokens
+# Needs Read + Write permissions.
+hcloud_token = "your-hetzner-api-token-here"
+
+# Required: your SSH public key (paste the full contents)
+# Generate with: ssh-keygen -t ed25519 -C "conduit"
+# Then: cat ~/.ssh/id_ed25519.pub
+ssh_public_key = "ssh-ed25519 AAAA... your-key-here"
+
+# Recommended: restrict SSH access to your own IP only
+# Find your IP at https://ifconfig.me — append /32 for a single IPv4
+# admin_cidr = ["203.0.113.1/32"]
+
+# Optional overrides (defaults are sensible for a dedicated CX23):
+# location            = "nbg1"     # nbg1, fsn1, hel1, ash, sin
+# conduit_version     = "release-cli-2.0.0"
+# conduit_bandwidth   = 40         # Mbps per peer
+# conduit_max_clients = 100        # concurrent clients
