@@ -1,0 +1,9 @@
+# Terraform
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+*.tfplan
+
+# Secrets and backups — never commit these
+terraform.tfvars
+backups/

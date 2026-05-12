@@ -1,22 +1,49 @@
-# Copy this file to terraform.tfvars and fill in your values.
-# terraform.tfvars is gitignored by default — do not commit it.
+# Copy to terraform.tfvars and fill in your values.
+# terraform.tfvars is gitignored — do not commit it.
 
-# Required: your Hetzner Cloud API token
-# Generate at: https://console.hetzner.cloud → (project) → Security → API Tokens
-# Needs Read + Write permissions.
-hcloud_token = "your-hetzner-api-token-here"
+# ── Required ──────────────────────────────────────────────────────────────────
 
-# Required: your SSH public key (paste the full contents)
-# Generate with: ssh-keygen -t ed25519 -C "conduit"
-# Then: cat ~/.ssh/id_ed25519.pub
-ssh_public_key = "ssh-ed25519 AAAA... your-key-here"
+hcloud_token         = "your-hetzner-api-token-here"
+ssh_public_key       = "ssh-ed25519 AAAA... your-key-here"
+ssh_private_key_path = "~/.ssh/id_ed25519"
 
-# Recommended: restrict SSH access to your own IP only
-# Find your IP at https://ifconfig.me — append /32 for a single IPv4
+# ── VLESS users ───────────────────────────────────────────────────────────────
+# Add/remove names and re-apply — no server rebuild needed.
+# Names: alphanumeric, hyphens, underscores only.
+vless_users = ["alice", "bob"]
+
+# ── Grafana Cloud ─────────────────────────────────────────────────────────────
+# Sign up free at https://grafana.com/auth/sign-up
+# Then: Home → your stack → Prometheus → Details
+grafana_cloud_prometheus_url  = "https://prometheus-xxx.grafana.net/api/prom/push"
+grafana_cloud_prometheus_user = "123456"
+# Generate API key: grafana.com → your org → Access Policies → MetricsPublisher role
+grafana_cloud_api_key = "glc_eyJ..."
+
+# ── Recommended ───────────────────────────────────────────────────────────────
+
+# Restrict SSH to your own IP. Find it at https://ifconfig.me
 # admin_cidr = ["203.0.113.1/32"]
 
-# Optional overrides (defaults are sensible for a dedicated CX23):
-# location            = "nbg1"     # nbg1, fsn1, hel1, ash, sin
+# ── Optional overrides ────────────────────────────────────────────────────────
+
+# location            = "nbg1"              # nbg1 fsn1 hel1 ash sin
 # conduit_version     = "release-cli-2.0.0"
-# conduit_bandwidth   = 40         # Mbps per peer
-# conduit_max_clients = 100        # concurrent clients
+# conduit_bandwidth   = 40
+# conduit_max_clients = 100
+# conduit_cpu_quota   = "60%"
+# xray_version        = "v26.4.25"
+# xray_exporter_version = "v0.2.0"
+# vless_sni           = "microsoft.com"
+# vless_domain        = "example.com"        # your Cloudflare-proxied domain (required for WS inbound)
+# alloy_version       = "v1.8.3"
+
+# ── Binary checksums (required) ───────────────────────────────────────────────
+# Run: ./scripts/get-checksums.sh
+# Paste the output here. Must be updated whenever any *_version changes above.
+# The script cross-checks against each project's upstream digest file where
+# available (Xray .dgst, Grafana SHA256SUMS) before printing values.
+conduit_sha256   = ""   # obtain via scripts/get-checksums.sh
+xray_zip_sha256  = ""   # obtain via scripts/get-checksums.sh
+alloy_zip_sha256 = ""   # obtain via scripts/get-checksums.sh
+# xray-exporter is verified at runtime against the release's checksums file
