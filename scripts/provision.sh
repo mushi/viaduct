@@ -166,13 +166,13 @@ remote /usr/local/sbin/xray-setup.sh --regen
 # ── 8. Start / restart all services ──────────────────────────────────────────
 
 log "Starting services..."
-remote systemctl restart conduit xray xray-exporter alloy nginx
+remote systemctl restart conduit xray xray-exporter xray-user-stats alloy nginx
 
 sleep 5
-if remote systemctl is-active --quiet conduit xray xray-exporter alloy nginx; then
+if remote systemctl is-active --quiet conduit xray xray-exporter xray-user-stats alloy nginx; then
   log "All services active."
 else
-  log "WARNING: one or more services failed to start. Check: journalctl -u conduit -u xray -u xray-exporter -u alloy -u nginx"
+  log "WARNING: one or more services failed to start. Check: journalctl -u conduit -u xray -u xray-exporter -u xray-user-stats -u alloy -u nginx"
 fi
 
 # ── 9. Download fresh backups ─────────────────────────────────────────────────

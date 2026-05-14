@@ -41,8 +41,17 @@ resource "hcloud_firewall" "conduit" {
     source_ips = var.admin_cidr
   }
 
-  # Port 443: nginx terminates TLS and proxies WebSocket (via Cloudflare) to
-  # the xray WS inbound on localhost. Cloudflare CDN hides the server IP.
+  # Port 80: nginx static website. Defeats active probing (DPI sends HTTP GET
+  # to suspected proxy IPs; a real page here looks like a legitimate server).
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "80"
+    source_ips = ["0.0.0.0/0", "::/0"]
+  }
+
+  # Port 443: xray Reality inbound (direct connections). xray handles TLS
+  # impersonation of vless_sni; no nginx involved on this port.
   rule {
     direction  = "in"
     protocol   = "tcp"
@@ -50,8 +59,8 @@ resource "hcloud_firewall" "conduit" {
     source_ips = ["0.0.0.0/0", "::/0"]
   }
 
-  # Port 8443: VLESS+Reality for direct connections (bypasses Cloudflare).
-  # Use for clients outside Iran where the server IP is not blocked.
+  # Port 8443: nginx terminates TLS (Let's Encrypt cert) and proxies XHTTP
+  # traffic to xray XHTTP inbound on localhost:10000. Use from Iran.
   rule {
     direction  = "in"
     protocol   = "tcp"
@@ -105,6 +114,7 @@ resource "hcloud_server" "conduit" {
     xray_zip_sha256       = var.xray_zip_sha256
     vless_sni             = var.vless_sni
     vless_domain          = var.vless_domain
+    cloudflare_api_token  = var.cloudflare_api_token
     xray_exporter_version = var.xray_exporter_version
     alloy_version         = var.alloy_version
     alloy_zip_sha256      = var.alloy_zip_sha256

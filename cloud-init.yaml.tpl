@@ -19,6 +19,8 @@ packages:
   - jq
   - openssl
   - nginx
+  - certbot
+  - python3-certbot-dns-cloudflare
 
 write_files:
 
@@ -115,7 +117,8 @@ write_files:
       ExecStart=/usr/local/bin/xray-exporter \
         --listen 127.0.0.1:9091 \
         --xray-endpoint 127.0.0.1:8080 \
-        --log-path /var/log/xray/access.log
+        --log-path /var/log/xray/access.log \
+        --log-time-window 1440
       Restart=always
       RestartSec=10
 
@@ -157,6 +160,102 @@ write_files:
 
       [Install]
       WantedBy=multi-user.target
+
+  # ── xray-user-stats: per-user traffic exporter ───────────────────────────
+  # xray-exporter intentionally skips user-level stats from the Stats API
+  # (cardinality guard). This sidecar queries the Stats API directly and
+  # exposes cumulative per-user uplink/downlink bytes on :9092/metrics.
+  - path: /usr/local/bin/xray-user-stats.py
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env python3
+      """Prometheus exporter: per-user traffic bytes from xray Stats API."""
+      import json, subprocess
+      from http.server import HTTPServer, BaseHTTPRequestHandler
+
+      LISTEN  = ("127.0.0.1", 9092)
+      XRAY    = "127.0.0.1:8080"
+      BINARY  = "/usr/local/bin/xray"
+
+      def query_stats():
+          try:
+              r = subprocess.run(
+                  [BINARY, "api", "statsquery", f"--server={XRAY}", "--pattern=user"],
+                  capture_output=True, text=True, timeout=5,
+              )
+              return json.loads(r.stdout).get("stat", [])
+          except Exception:
+              return []
+
+      def render(stats):
+          up, down = {}, {}
+          for s in stats:
+              parts = s.get("name", "").split(">>>")
+              if len(parts) != 4 or parts[0] != "user" or parts[2] != "traffic":
+                  continue
+              user, direction, value = parts[1], parts[3], s.get("value", 0)
+              (up if direction == "uplink" else down)[user] = value
+          lines = [
+              "# HELP xray_user_uplink_bytes_total Cumulative uplink bytes per user",
+              "# TYPE xray_user_uplink_bytes_total counter",
+          ]
+          for user, v in up.items():
+              lines.append(f'xray_user_uplink_bytes_total{{user="{user}"}} {v}')
+          lines += [
+              "# HELP xray_user_downlink_bytes_total Cumulative downlink bytes per user",
+              "# TYPE xray_user_downlink_bytes_total counter",
+          ]
+          for user, v in down.items():
+              lines.append(f'xray_user_downlink_bytes_total{{user="{user}"}} {v}')
+          return "\n".join(lines) + "\n"
+
+      class Handler(BaseHTTPRequestHandler):
+          def do_GET(self):
+              body = render(query_stats()).encode()
+              self.send_response(200)
+              self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+              self.send_header("Content-Length", str(len(body)))
+              self.end_headers()
+              self.wfile.write(body)
+          def log_message(self, *_):
+              pass
+
+      HTTPServer(LISTEN, Handler).serve_forever()
+
+  - path: /etc/systemd/system/xray-user-stats.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Xray per-user traffic Prometheus exporter
+      After=xray.service
+      Wants=xray.service
+
+      [Service]
+      Type=simple
+      User=xray
+      Group=xray
+      ExecStart=/usr/bin/python3 /usr/local/bin/xray-user-stats.py
+      Restart=always
+      RestartSec=10
+
+      NoNewPrivileges=true
+      PrivateTmp=true
+      ProtectSystem=strict
+      ProtectHome=true
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # ── Cloudflare API credentials for certbot DNS-01 challenge ─────────────
+  # Used by certbot to create a DNS TXT record proving domain ownership.
+  # Requires a Cloudflare API token with Zone:DNS:Edit permission.
+  - path: /etc/cloudflare-certbot.ini
+    owner: root:root
+    permissions: "0600"
+    content: |
+      dns_cloudflare_api_token = ${cloudflare_api_token}
 
   # ── Automatic security updates ────────────────────────────────────────────
   - path: /etc/apt/apt.conf.d/20auto-upgrades
@@ -261,8 +360,8 @@ write_files:
       LOG_DIR=/var/log/xray
       SNI="${vless_sni}"
       DOMAIN="${vless_domain}"
-      REALITY_PORT=8443
-      WS_PORT=10000
+      REALITY_PORT=443
+      XHTTP_PORT=10000
 
       if [[ "$${1:-}" == "--regen" ]]; then
         echo "Regenerating Xray config (preserving keypair and UUIDs)..."
@@ -310,9 +409,9 @@ write_files:
 
       # ── Per-user UUIDs and Xray clients JSON ─────────────────────────────
       CLIENTS_JSON_REALITY=""
-      CLIENTS_JSON_WS=""
+      CLIENTS_JSON_XHTTP=""
       SEPARATOR_R=""
-      SEPARATOR_W=""
+      SEPARATOR_X=""
 
       while IFS= read -r USERNAME; do
         [[ -z "$USERNAME" || "$USERNAME" == \#* ]] && continue
@@ -336,34 +435,34 @@ write_files:
                 }"
         SEPARATOR_R=","
 
-        CLIENTS_JSON_WS+="$${SEPARATOR_W}
+        CLIENTS_JSON_XHTTP+="$${SEPARATOR_X}
                 {
                   \"id\": \"$USER_UUID\",
                   \"email\": \"$USERNAME\"
                 }"
-        SEPARATOR_W=","
+        SEPARATOR_X=","
 
         REALITY_URI="vless://$USER_UUID@$SERVER_IP:$REALITY_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$SNI&fp=chrome&pbk=$PUBLIC_KEY&sid=$SHORT_ID&type=tcp#$USERNAME-reality"
-        WS_URI="vless://$USER_UUID@$DOMAIN:443?encryption=none&security=tls&sni=$DOMAIN&type=ws&path=%2Fvless&host=$DOMAIN#$USERNAME-ws"
+        XHTTP_URI="vless://$USER_UUID@$DOMAIN:8443?encryption=none&security=tls&sni=$DOMAIN&fp=chrome&type=xhttp&path=%2Fapi#$USERNAME-xhttp"
 
         cat > "$CLIENTS_DIR/$${USERNAME}.txt" <<EOF
       # ── VLESS+Reality URI for: $USERNAME ────────────────────────────────────
-      # Direct connection — bypasses Cloudflare. Use OUTSIDE Iran.
+      # Direct connection to server IP. Use OUTSIDE Iran.
       # Server: $SERVER_IP:$REALITY_PORT | SNI spoof: $SNI
       $REALITY_URI
 
-      # ── VLESS+WebSocket URI for: $USERNAME (via Cloudflare CDN) ─────────────
-      # Use FROM IRAN — connects via example.com, hides server IP behind Cloudflare.
-      # Server: $DOMAIN:443 | Path: /vless
-      $WS_URI
+      # ── VLESS+XHTTP URI for: $USERNAME ──────────────────────────────────────
+      # HTTPS H2 transport via $DOMAIN. Use FROM Iran.
+      # Server: $DOMAIN:8443 | Path: /api
+      $XHTTP_URI
       EOF
         chmod 600 "$CLIENTS_DIR/$${USERNAME}.txt"
       done < "$USERS_FILE"
 
       # ── Xray server config ────────────────────────────────────────────────
       # Includes:
-      #   • VLESS+Reality inbound on port 8443 (direct connections, non-Iran)
-      #   • VLESS+WebSocket inbound on 127.0.0.1:10000 (nginx proxies from 443)
+      #   • VLESS+Reality inbound on port 443 (direct connections, non-Iran)
+      #   • VLESS+XHTTP inbound on 127.0.0.1:10000 (nginx proxies from 8443)
       #   • Stats API (gRPC) on 127.0.0.1:8080 for xray-exporter
       #   • Metrics (expvar) on 127.0.0.1:11111 for debugging
       #   • Per-user traffic stats via policy + stats blocks
@@ -373,7 +472,8 @@ write_files:
         "log": {
           "loglevel": "warning",
           "access": "/var/log/xray/access.log",
-          "error":  "/var/log/xray/error.log"
+          "error":  "/var/log/xray/error.log",
+          "maskAddress": "full"
         },
         "api": {
           "tag": "api",
@@ -413,18 +513,18 @@ write_files:
           },
           {
             "listen": "127.0.0.1",
-            "port": $WS_PORT,
+            "port": $XHTTP_PORT,
             "protocol": "vless",
-            "tag": "vless_ws_in",
+            "tag": "vless_xhttp_in",
             "settings": {
-              "clients": [$CLIENTS_JSON_WS
+              "clients": [$CLIENTS_JSON_XHTTP
               ],
               "decryption": "none"
             },
             "streamSettings": {
-              "network": "ws",
+              "network": "xhttp",
               "security": "none",
-              "wsSettings": { "path": "/vless" }
+              "xhttpSettings": { "path": "/api", "mode": "auto" }
             },
             "sniffing": { "enabled": true, "destOverride": ["http", "tls"] }
           },
@@ -525,36 +625,64 @@ runcmd:
     chmod +x /usr/local/bin/alloy
     rm /tmp/alloy.zip
 
-  # ── nginx: TLS cert + WebSocket reverse proxy config ─────────────────────
-  # Generates a self-signed cert (Cloudflare SSL mode must be set to "Full").
-  # nginx proxies wss://example.com/vless → xray WS inbound on 127.0.0.1:10000.
-  # The default site is removed so only our config runs on port 443.
+  # ── nginx: static website + XHTTP reverse proxy ──────────────────────────
+  # Port 80: serves a static page (defeats active probing by DPI).
+  # Port 8443: TLS proxy to xray XHTTP inbound on 127.0.0.1:10000.
+  # TLS cert obtained via certbot DNS-01 challenge (no port 80 access needed).
+  - mkdir -p /var/www/html
   - |
-    mkdir -p /etc/nginx/ssl
-    openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
-      -keyout /etc/nginx/ssl/origin.key \
-      -out /etc/nginx/ssl/origin.crt \
-      -subj "/CN=${vless_domain}" \
-      2>/dev/null
-    chmod 600 /etc/nginx/ssl/origin.key
-    cat > /etc/nginx/conf.d/vless-ws.conf <<'NGINX_CONF'
+    cat > /var/www/html/index.html <<'EOF'
+    <!DOCTYPE html>
+    <html lang="en">
+    <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Welcome</title>
+    <style>body{font-family:sans-serif;max-width:600px;margin:80px auto;padding:0 20px;color:#333}</style></head>
+    <body><h1>Welcome</h1><p>This site is currently under maintenance. Please check back later.</p></body>
+    </html>
+    EOF
+  - |
+    certbot certonly \
+      --dns-cloudflare \
+      --dns-cloudflare-credentials /etc/cloudflare-certbot.ini \
+      -d ${vless_domain} \
+      --non-interactive \
+      --agree-tos \
+      --register-unsafely-without-email \
+      --dns-cloudflare-propagation-seconds 30
+  - |
+    cat > /etc/nginx/conf.d/site.conf <<'NGINX_CONF'
     server {
-        listen 443 ssl default_server;
-        listen [::]:443 ssl default_server;
+        listen 80 default_server;
+        listen [::]:80 default_server;
         server_name _;
+        server_tokens off;
 
-        ssl_certificate     /etc/nginx/ssl/origin.crt;
-        ssl_certificate_key /etc/nginx/ssl/origin.key;
+        root /var/www/html;
+        index index.html;
+
+        location / {
+            try_files $uri $uri/ =404;
+        }
+    }
+
+    server {
+        listen 8443 ssl http2;
+        listen [::]:8443 ssl http2;
+        server_name ${vless_domain};
+        server_tokens off;
+
+        ssl_certificate     /etc/letsencrypt/live/${vless_domain}/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/${vless_domain}/privkey.pem;
         ssl_protocols       TLSv1.2 TLSv1.3;
         ssl_ciphers         HIGH:!aNULL:!MD5;
+        ssl_session_cache   shared:SSL:10m;
+        ssl_session_timeout 10m;
 
-        location /vless {
+        location /api {
             proxy_pass         http://127.0.0.1:10000;
             proxy_http_version 1.1;
-            proxy_set_header   Upgrade $http_upgrade;
-            proxy_set_header   Connection "upgrade";
             proxy_set_header   Host $host;
             proxy_read_timeout 86400s;
+            proxy_buffering    off;
         }
 
         location / {
@@ -562,12 +690,19 @@ runcmd:
         }
     }
     NGINX_CONF
-    rm -f /etc/nginx/sites-enabled/default
-    nginx -t && systemctl reload nginx
+  - |
+    mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+    cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh <<'EOF'
+    #!/bin/bash
+    systemctl reload nginx
+    EOF
+    chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+  - rm -f /etc/nginx/sites-enabled/default
+  - nginx -t
 
   # ── Register units (do NOT start — provisioner does that) ─────────────────
   - systemctl daemon-reload
-  - systemctl enable conduit.service xray.service xray-exporter.service alloy.service nginx.service
+  - systemctl enable conduit.service xray.service xray-exporter.service xray-user-stats.service alloy.service nginx.service
 
   # ── Signal cloud-init completion ──────────────────────────────────────────
   # Only reached if all checksum verifications above passed.

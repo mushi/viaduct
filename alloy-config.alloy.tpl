@@ -26,6 +26,18 @@ prometheus.scrape "xray" {
   metrics_path   = "/scrape"
 }
 
+// ── Scrape: per-user traffic stats ───────────────────────────────────────
+// xray-user-stats queries the xray Stats gRPC API directly and exposes
+// cumulative per-user uplink/downlink bytes. xray-exporter intentionally
+// omits user stats for cardinality reasons; this fills that gap.
+
+prometheus.scrape "xray_user_stats" {
+  targets = [{ "__address__" = "127.0.0.1:9092" }]
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+  job_name   = "xray_user_stats"
+  scrape_interval = "30s"
+}
+
 // ── Scrape: node (system) metrics ─────────────────────────────────────────
 // Alloy has a built-in node_exporter equivalent. Gives CPU, memory,
 // network I/O, and disk — useful for correlating traffic with system load.

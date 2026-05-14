@@ -20,6 +20,11 @@ grafana_cloud_prometheus_user = "123456"
 # Generate API key: grafana.com → your org → Access Policies → MetricsPublisher role
 grafana_cloud_api_key = "glc_eyJ..."
 
+# Cloudflare API token for Let's Encrypt DNS-01 challenge (XHTTP TLS cert).
+# Create at dash.cloudflare.com → My Profile → API Tokens
+# Permissions needed: Zone:DNS:Edit for your vless_domain zone.
+cloudflare_api_token = "your-cloudflare-api-token-here"
+
 # ── Recommended ───────────────────────────────────────────────────────────────
 
 # Restrict SSH to your own IP. Find it at https://ifconfig.me
@@ -35,7 +40,7 @@ grafana_cloud_api_key = "glc_eyJ..."
 # xray_version        = "v26.4.25"
 # xray_exporter_version = "v0.2.0"
 # vless_sni           = "microsoft.com"
-# vless_domain        = "example.com"        # your Cloudflare-proxied domain (required for WS inbound)
+# vless_domain        = "example.com"        # domain for XHTTP TLS cert + XHTTP URI; A record must be DNS-only (unproxied)
 # alloy_version       = "v1.8.3"
 
 # ── Binary checksums (required) ───────────────────────────────────────────────

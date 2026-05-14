@@ -115,8 +115,14 @@ variable "grafana_cloud_prometheus_user" {
 
 variable "grafana_cloud_api_key" {
   description = "Grafana Cloud API key with MetricsPublisher role. Generate at grafana.com → your org → Access Policies."
-  type        = string
-  sensitive   = true
+  type      = string
+  sensitive = true
+}
+
+variable "cloudflare_api_token" {
+  description = "Cloudflare API token for certbot DNS-01 challenge. Create at dash.cloudflare.com → My Profile → API Tokens with Zone:DNS:Edit permission for the vless_domain zone."
+  type      = string
+  sensitive = true
 }
 
 # ── Binary checksums ──────────────────────────────────────────────────────────
