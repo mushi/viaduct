@@ -466,7 +466,7 @@ write_files:
       #   • Stats API (gRPC) on 127.0.0.1:8080 for xray-exporter
       #   • Metrics (expvar) on 127.0.0.1:11111 for debugging
       #   • Per-user traffic stats via policy + stats blocks
-      #   • Routing: block RFC-1918 to prevent pivot into private networks
+      #   • Routing: block RFC-1918 + Iranian IPs/domains (prevents proxy fingerprint)
       cat > "$CONFIG_FILE" <<JSON
       {
         "log": {
@@ -552,7 +552,9 @@ write_files:
           "rules": [
             { "type": "field", "inboundTag": ["api"],        "outboundTag": "api" },
             { "type": "field", "inboundTag": ["metrics_in"], "outboundTag": "direct" },
-            { "type": "field", "ip": ["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","127.0.0.0/8","169.254.0.0/16","100.64.0.0/10","fc00::/7","::1/128"], "outboundTag": "block" }
+            { "type": "field", "ip": ["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","127.0.0.0/8","169.254.0.0/16","100.64.0.0/10","fc00::/7","::1/128"], "outboundTag": "block" },
+            { "type": "field", "ip": ["geoip:ir"], "outboundTag": "block" },
+            { "type": "field", "domain": ["geosite:category-ir"], "outboundTag": "block" }
           ]
         }
       }
@@ -605,6 +607,18 @@ runcmd:
     unzip -o /tmp/xray.zip xray -d /usr/local/bin/
     chmod +x /usr/local/bin/xray
     rm /tmp/xray.zip
+
+  # ── Xray geo data files ───────────────────────────────────────────────────
+  # geoip.dat and geosite.dat are required for routing rules that reference
+  # geoip:ir and geosite:category-ir (block Iranian IP ranges/domains so the
+  # server does not proxy back to Iranian infrastructure — prevents proxy
+  # fingerprinting by traffic analysis). Xray looks for these files alongside
+  # the binary at /usr/local/bin/.
+  - |
+    curl -fsSL "https://github.com/v2fly/geoip/releases/latest/download/geoip.dat" \
+      -o /usr/local/bin/geoip.dat
+    curl -fsSL "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat" \
+      -o /usr/local/bin/geosite.dat
 
   # ── xray-exporter binary ──────────────────────────────────────────────────
   # Delegates to a write_files bash script (install-xray-exporter.sh) so that
