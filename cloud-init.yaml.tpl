@@ -471,7 +471,7 @@ write_files:
       {
         "log": {
           "loglevel": "warning",
-          "access": "/var/log/xray/access.log",
+          "access": "none",
           "error":  "/var/log/xray/error.log",
           "maskAddress": "full"
         },

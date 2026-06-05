@@ -5,59 +5,57 @@ Deploys a Hetzner CX23 server (~€4/month) running:
 | Service | Purpose |
 |---|---|
 | **Conduit** | Psiphon inproxy relay — censorship circumvention for Psiphon clients |
-| **Xray** | VLESS proxy — Reality (direct) + WebSocket via Cloudflare CDN |
-| **nginx** | TLS reverse proxy — forwards Cloudflare WebSocket traffic to Xray |
+| **Xray** | VLESS proxy — Reality (direct, port 443) + XHTTP+TLS via Let's Encrypt (port 8443) |
+| **nginx** | Port 80: static website (active probing defence). Port 8443: terminates Let's Encrypt TLS, proxies XHTTP to Xray |
 | **xray-exporter** | Prometheus exporter for Xray inbound/system traffic stats |
 | **xray-user-stats** | Sidecar exporter for per-user traffic bytes (from Xray Stats API) |
 | **Grafana Alloy** | Metrics agent — scrapes all exporters, remote-writes to Grafana Cloud |
 
-All services run as unprivileged users under systemd. Only ports 22, 443, and 8443 are open inbound. Metrics are pushed outbound to Grafana Cloud — no inbound scrape port needed.
+All services run as unprivileged users under systemd. Ports 22, 80, 443, and 8443 are open inbound. Metrics are pushed outbound to Grafana Cloud — no inbound scrape port needed.
 
 ## Architecture
 
 ```
-┌─────────────────────────── Clients ───────────────────────────────┐
-│                                                                   │
-│  Iran / blocked regions          Direct (anywhere)                │
-│  VLESS+WebSocket+TLS             VLESS+Reality+TCP                │
-│  → example.com:443                 → server-ip:8443                 │
-└──────────┬─────────────────────────────┬──────────────────────────┘
-           │                             │
-           ▼                             │
-   ┌───────────────┐                     │
-   │  Cloudflare   │  (hides server IP)  │
-   │  CDN / Proxy  │                     │
-   └───────┬───────┘                     │
-           │ HTTPS → HTTP (TLS strip)    │
-           ▼                             ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  CX23 server (203.0.113.10)                                   │
-│                                                                  │
-│  nginx :443 (TLS, self-signed)                                   │
-│    └── /vless WebSocket ──► xray WS inbound  :10000 (lo)         │
-│                                                                  │
-│  xray Reality inbound :8443 ◄──────────────────────────────────  │
-│                                                                  │
-│  conduit        ── :9090/metrics ──┐                             │
-│  xray-exporter  ── :9091/scrape  ──┤                             │
-│  xray-user-stats── :9092/metrics ──┤                             │
-│  alloy (node exporter built-in)    │                             │
-│       └── remote-write (HTTPS) ────┘──────────────────────────►  │
-│                                                                  │
-└─────────────────────────── Grafana Cloud ────────────────────────┘
-                             (hosted Prometheus + Grafana)
+┌──────────────────────────────── Clients ─────────────────────────────────┐
+│                                                                          │
+│  Iran / blocked regions                  Direct (anywhere)               │
+│  VLESS+XHTTP+TLS                         VLESS+Reality+TCP               │
+│  → example.com:8443                        → server-ip:443                 │
+└────────────────────────────────────┬──────────────────┬──────────────────┘
+                                     │                  │
+                                     ▼                  ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  CX23 server (203.0.113.10)                                          │
+│                                                                         │
+│  nginx :80  (static site — active probing defence)                      │
+│                                                                         │
+│  nginx :8443 (Let's Encrypt TLS for example.com, HTTP/2)                  │
+│    └── /api ──► xray XHTTP inbound :10000 (lo)                          │
+│                                                                         │
+│  xray Reality inbound :443 ◄────────────────────────────────────────    │
+│    (TLS impersonation of google.com — direct connections)               │
+│                                                                         │
+│  conduit        ── :9090/metrics ──┐                                    │
+│  xray-exporter  ── :9091/scrape  ──┤                                    │
+│  xray-user-stats── :9092/metrics ──┤                                    │
+│  alloy (node exporter built-in)    │                                    │
+│       └── remote-write (HTTPS) ────┴───────────────────────────────►    │
+│                                                                         │
+└──────────────────────────── Grafana Cloud ──────────────────────────────┘
+                              (hosted Prometheus + Grafana)
 ```
 
-Each user gets **two client URIs**:
-- **WebSocket URI** (`*-ws`) — connects via `example.com:443` through Cloudflare. Use from Iran and other regions where the server IP is blocked.
-- **Reality URI** (`*-reality`) — connects directly to `server-ip:8443`. Lower latency, use outside Iran.
+Each user gets **two client URIs** (saved to `backups/clients/<name>.txt`):
+- **XHTTP URI** (`*-xhttp`) — connects to `example.com:8443` via Let's Encrypt TLS + HTTP/2. Use from Iran and regions where the server IP may be blocked.
+- **Reality URI** (`*-reality`) — connects directly to `server-ip:443`. Lower latency; use from anywhere the server IP is reachable.
+
+> **Iran note:** `example.com` must remain DNS-only (unproxied) in Cloudflare — the A record points directly to the server. Cloudflare is blocked in Iran; routing traffic through it would break XHTTP for Iranian users.
 
 ## Prerequisites
 
 - [Terraform](https://developer.hashicorp.com/terraform/install) ≥ 1.3
 - A [Hetzner Cloud](https://www.hetzner.com/cloud/) account
-- A [Cloudflare](https://cloudflare.com) account (free tier)
-- A domain name pointed to Cloudflare (e.g. `example.com`)
+- A domain name with [Cloudflare](https://cloudflare.com) as the DNS provider (free tier sufficient — used only for DNS-01 certificate issuance, not CDN proxying)
 - A [Grafana Cloud](https://grafana.com/auth/sign-up) account (free tier)
 - An SSH key pair on your local machine
 
@@ -67,8 +65,10 @@ Each user gets **two client URIs**:
 
 1. Register a domain (Namecheap, Porkbun, or Cloudflare Registrar — all include free WHOIS privacy)
 2. Add the domain to Cloudflare → note the two nameservers → set them in your registrar
-3. In Cloudflare DNS, add an **A record**: name `@`, value = your Hetzner server IP, **Proxied** (orange cloud)
-4. In Cloudflare **SSL/TLS → Overview**, set encryption mode to **Full** (not Flexible, not Full strict)
+3. In Cloudflare DNS, add an **A record**: name `@`, value = your Hetzner server IP, **DNS-only** (grey cloud — do not proxy)
+4. Create a Cloudflare API token: **My Profile → API Tokens → Create Token**
+   - Permission: `Zone:DNS:Edit` scoped to your domain zone
+   - This token is used only by certbot for DNS-01 certificate issuance
 
 ### 2. Grafana Cloud
 
@@ -82,8 +82,9 @@ Each user gets **two client URIs**:
 
 ```sh
 cp terraform.tfvars.example terraform.tfvars
-# Fill in: hcloud_token, ssh keys, vless_domain, vless_users, grafana_cloud_* values, 
-# binary versions (and checksums, from separately running get-checksums.sh
+# Fill in: hcloud_token, ssh keys, vless_domain, vless_users,
+# cloudflare_api_token, grafana_cloud_* values,
+# binary versions and checksums (run scripts/get-checksums.sh)
 
 terraform init
 terraform plan
@@ -98,8 +99,6 @@ After `apply`, the provisioner:
 5. Starts all six services
 6. Downloads fresh backups to `backups/`
 
-Both Reality and WebSocket client URIs are saved locally to `backups/clients/<name>.txt`.
-
 ## Dashboards
 
 | Dashboard | Source |
@@ -112,7 +111,7 @@ To import the VLESS dashboard: Grafana → Dashboards → New → Import → upl
 
 The dashboard shows:
 - Service status and uptime
-- Bandwidth by inbound (`vless_ws_in` = WebSocket/Cloudflare, `vless_in` = Reality/direct)
+- Bandwidth by inbound (`vless_xhttp_in` = XHTTP/TLS, `vless_in` = Reality/direct)
 - Per-user uplink/downlink rates and totals (from `xray-user-stats`)
 - Active users in the last 24 hours
 
@@ -129,7 +128,7 @@ The provisioner detects the change (via `users_hash` trigger), uploads the new `
 ## What happens on terraform apply
 
 ### First apply (new server)
-cloud-init installs binaries, nginx, and registers systemd units. The provisioner then uploads backups, generates credentials, starts services, and downloads backups.
+cloud-init installs binaries, nginx, certbot, and registers systemd units. Let's Encrypt issues a certificate via DNS-01 challenge. The provisioner then uploads backups, generates credentials, starts services, and downloads backups.
 
 ### Subsequent applies (users changed)
 Server is not rebuilt. Provisioner re-runs due to `users_hash` trigger.
@@ -182,7 +181,7 @@ backups/
   alloy-config.alloy    # Rendered Alloy config with Grafana credentials
   clients/
     alice.uuid           # Per-user UUID — preserved across rebuilds
-    alice.txt            # Per-user URIs (Reality + WebSocket)
+    alice.txt            # Per-user URIs (Reality + XHTTP)
 ```
 
 ### Server
@@ -192,16 +191,19 @@ backups/
 | `/usr/local/bin/conduit` | Conduit binary |
 | `/var/lib/conduit/data/conduit_key.json` | Conduit identity |
 | `/usr/local/bin/xray` | Xray-core binary |
+| `/usr/local/bin/geoip.dat` | IP geolocation data (v2fly) — used for `geoip:ir` routing rules |
+| `/usr/local/bin/geosite.dat` | Domain category data (v2fly) — used for `geosite:category-ir` routing rules |
 | `/etc/xray/config.json` | Xray config (root:xray 640) |
 | `/etc/xray/keypair.env` | Reality keypair (root 600) |
 | `/etc/xray/users.txt` | Current user list |
 | `/etc/xray/clients/<name>.uuid` | Per-user UUID |
-| `/etc/xray/clients/<name>.txt` | Per-user URIs (Reality + WebSocket) |
+| `/etc/xray/clients/<name>.txt` | Per-user URIs (Reality + XHTTP) |
 | `/usr/local/sbin/xray-setup.sh` | Generates xray config + per-user UUIDs and URIs from `/etc/xray/users.txt`. Run with `--regen` to regenerate after editing users. Restart xray after. |
 | `/usr/local/bin/xray-exporter` | Xray inbound stats → Prometheus |
 | `/usr/local/bin/xray-user-stats.py` | Xray per-user stats → Prometheus (port 9092) |
-| `/etc/nginx/conf.d/vless-ws.conf` | nginx WebSocket proxy config |
-| `/etc/nginx/ssl/origin.{crt,key}` | Self-signed TLS cert for nginx (Cloudflare Full mode) |
+| `/etc/nginx/conf.d/site.conf` | nginx config: port 80 static site + port 8443 XHTTP proxy |
+| `/etc/letsencrypt/live/<vless_domain>/fullchain.pem` | Let's Encrypt TLS certificate (auto-renews via systemd timer) |
+| `/etc/letsencrypt/live/<vless_domain>/privkey.pem` | Let's Encrypt private key |
 | `/usr/local/bin/alloy` | Grafana Alloy binary |
 | `/etc/alloy/config.alloy` | Alloy scrape + remote-write config |
 
@@ -224,8 +226,8 @@ ssh root@<ip> 'curl -s http://127.0.0.1:9092/metrics'              # xray-user-s
 # Query xray Stats API directly
 ssh root@<ip> '/usr/local/bin/xray api statsquery --server=127.0.0.1:8080 --pattern=user'
 
-# Confirm  Cloudflare is proxying your domain
-ssh root@<ip> dig +short your.url
+# Check Let's Encrypt certificate expiry
+ssh root@<ip> 'certbot certificates'
 
 # Manually re-run provisioner without a full apply
 terraform apply -replace=null_resource.provision
@@ -247,13 +249,19 @@ cd khajubridge
 chmod +x scripts/*.sh install.sh
 sudo bash install.sh
 sudo /opt/khajubridge/scripts/update_region_cidrs.sh
+sudo sed -i '/^define IRAN_UDP_RATE/d' /opt/khajubridge/nftables/conduit-region.nft
+sudo sed -i \
+  's/limit rate \$IRAN_UDP_RATE burst \$IRAN_UDP_BURST packets/limit rate 100000\/second burst 200000 packets/g' \
+  /opt/khajubridge/nftables/conduit-region.nft
 sudo /opt/khajubridge/scripts/apply_firewall.sh
-sudo cp systemd/khajubridge-cidr-refresh.service /etc/systemd/system/
-sudo cp systemd/khajubridge-cidr-refresh.timer   /etc/systemd/system/
-sudo cp -r systemd/conduit.service.d             /etc/systemd/system/
+sudo cp /opt/khajubridge/systemd/khajubridge-cidr-refresh.service /etc/systemd/system/
+sudo cp /opt/khajubridge/systemd/khajubridge-cidr-refresh.timer   /etc/systemd/system/
+sudo cp -r /opt/khajubridge/systemd/conduit.service.d             /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now khajubridge-cidr-refresh.timer
 ```
+
+The two `sed` commands work around a syntax error in the nftables template (rate expressions are not valid in `define` statements on Ubuntu 24.04's nftables).
 
 To remove: `sudo nft delete table inet khajubridge && sudo systemctl disable --now khajubridge-cidr-refresh.timer`
 
@@ -264,7 +272,9 @@ Note: KhajuBridge is not managed by Terraform and must be reapplied manually aft
 - `backups/` is gitignored. Store it in a password manager vault or encrypted drive.
 - The Alloy config contains your Grafana Cloud API key — treat it like a password.
 - The Reality keypair is equivalent to a TLS private key — back it up and keep it private.
-- nginx uses a self-signed certificate. Cloudflare SSL mode must be set to **Full** (not Flexible, not Full strict) — Flexible would send traffic to the server unencrypted; Full strict would reject the self-signed cert.
+- The Cloudflare API token only needs `Zone:DNS:Edit` permission. It is used solely by certbot for DNS-01 certificate renewal and is never exposed to client traffic.
+- Port 80 serves a static website intentionally — this defeats active probing (DPI systems that send HTTP GET requests to suspected proxy IPs will receive a legitimate-looking response).
+- Iranian IP ranges and domains are routed to a `block` outbound in Xray (`geoip:ir`, `geosite:category-ir`), preventing the server from proxying traffic back to Iranian infrastructure. This removes a potential fingerprinting signal.
 
 ## Teardown
 
