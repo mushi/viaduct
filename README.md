@@ -20,16 +20,16 @@ All services run as unprivileged users under systemd. Ports 22, 80, 443, and 844
 │                                                                          │
 │  Iran / blocked regions                  Direct (anywhere)               │
 │  VLESS+XHTTP+TLS                         VLESS+Reality+TCP               │
-│  → example.com:8443                        → server-ip:443                 │
+│  → example.com:8443                        → server-ip:443               │
 └────────────────────────────────────┬──────────────────┬──────────────────┘
                                      │                  │
                                      ▼                  ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  CX23 server (203.0.113.10)                                          │
+│  CX23 server (203.0.113.10)                                             │
 │                                                                         │
 │  nginx :80  (static site — active probing defence)                      │
 │                                                                         │
-│  nginx :8443 (Let's Encrypt TLS for example.com, HTTP/2)                  │
+│  nginx :8443 (Let's Encrypt TLS for example.com, HTTP/2)                │
 │    └── /api ──► xray XHTTP inbound :10000 (lo)                          │
 │                                                                         │
 │  xray Reality inbound :443 ◄────────────────────────────────────────    │
@@ -281,3 +281,26 @@ Note: KhajuBridge is not managed by Terraform and must be reapplied manually aft
 ```sh
 terraform destroy
 ```
+
+## License
+
+Released under the [MIT License](LICENSE).
+
+## Acknowledgements
+
+Built on these open-source projects:
+
+- [Xray-core](https://github.com/XTLS/Xray-core) — VLESS / Reality / XHTTP proxy core
+- [Psiphon Conduit](https://github.com/Psiphon-Inc/conduit) — in-proxy relay for Psiphon clients
+- [Grafana Alloy](https://github.com/grafana/alloy) — metrics collection agent
+- [v2fly/geoip](https://github.com/v2fly/geoip) and [v2fly/domain-list-community](https://github.com/v2fly/domain-list-community) — geo-routing data
+
+Configuration, scripts and documentation co-authored with [Claude](https://claude.ai) (Anthropic).
+
+## Disclaimer
+
+This repository contains personal infrastructure-as-code for deploying a
+censorship-circumvention node. It is published for educational and transparency
+purposes. It is not an operated service — this repository provides no
+infrastructure, access, or credentials. Anyone who deploys their own instance is
+solely responsible for complying with all applicable laws and regulations.

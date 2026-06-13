@@ -7,3 +7,10 @@ terraform.tfstate.backup
 # Secrets and backups — never commit these
 terraform.tfvars
 backups/
+
+# IDE / editor
+.idea/
+*.iml
+
+# Generated
+*.html
