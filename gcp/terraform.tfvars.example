@@ -1,0 +1,17 @@
+project_id = "your-gcp-project-id"
+region     = "us-central1"
+zone       = "us-central1-a"
+
+# Admin username + SSH public key content (not a path).
+ssh_user       = "viaduct"
+ssh_public_key = "ssh-ed25519 AAAA... your-key-here"
+
+# Restrict SSH to your own IP /32. Find it at https://ifconfig.me
+admin_cidr = ["203.0.113.10/32"]
+
+# AWS + Hetzner node IPs, added once those nodes exist. Empty disables the
+# Vault/SPIRE ingress rule.
+agent_cidrs = []
+
+# Globally-unique GCS bucket name for Vault Raft snapshots.
+snapshot_bucket_name = "your-unique-vault-snapshot-bucket"
