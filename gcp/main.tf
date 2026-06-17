@@ -104,6 +104,16 @@ resource "google_kms_crypto_key_iam_member" "vault_unseal_viewer" {
   member        = "serviceAccount:${google_service_account.controlplane.email}"
 }
 
+# Vault's GCP (gce) auth method verifies a logging-in instance via the compute
+# API. Scoped to this instance only. Widen to project-level roles/compute.viewer
+# if the auth check reports a permission error.
+resource "google_compute_instance_iam_member" "vault_gce_auth" {
+  zone          = var.zone
+  instance_name = google_compute_instance.controlplane.name
+  role          = "roles/compute.viewer"
+  member        = "serviceAccount:${google_service_account.controlplane.email}"
+}
+
 # ─── Vault Raft snapshot bucket (DURABLE) ────────────────────────────────────
 resource "google_storage_bucket" "vault_snapshots" {
   name                        = var.snapshot_bucket_name
