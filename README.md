@@ -1,8 +1,17 @@
-# Viaduct - Conduit + VLESS Station on Hetzner Cloud (Terraform)
+# Viaduct - Conduit + VLESS Station on Multiple Clouds (Terraform)
 
 ## What
-A complete Terraform project deploying a VLESS+Reality proxy ([Xray-core](https://github.com/XTLS/Xray-core)) and a Psiphon Conduit relay ([Psiphon Conduit](https://github.com/Psiphon-Inc/conduit), donating bandwidth to Psiphon users) on a single low-cost host, with metrics sent to Grafana Cloud.
-
+A lab that extends the main branch into a multi-cloud SPIFFE/SPIRE + Vault
+deployment. It adds no user-facing capability over main; its purpose is to exercise
+cross-cloud workload identity and secrets management. \
+Three nodes, each a separate Terraform root:
+1. **Hetzner** — the production node from main: VLESS+Reality proxy
+   ([Xray-core](https://github.com/XTLS/Xray-core)) + Psiphon Conduit relay
+   ([Psiphon Conduit](https://github.com/Psiphon-Inc/conduit)), unchanged.
+2. **AWS** — a k3s (Kubernetes) node running a SPIRE agent and a bandwidth-capped
+   Conduit pod, for Kubernetes-based workload attestation.
+3. **GCP** — the control plane: Vault (secrets management) and the SPIRE server
+   (workload attestation) that the other two nodes authenticate to.
 ### VLESS
 End users connect with a client app — V2RayNG (Android), v2rayN (Windows), or Nekoray — that routes their device's traffic through the server. It works like a VPN for the user, though the underlying protocol is a proxy. This project generates connection URIs per user.
 
