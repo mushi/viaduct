@@ -24,3 +24,6 @@ spire_version         = "1.15.1"
 spire_sha256          = "<sha256 of spire-1.15.1-linux-amd64-musl.tar.gz>"
 spire_approle_role_id = "<vault approle role_id>"
 trust_domain          = "viaduct.gcp"
+
+# Vault snapshot job AppRole role_id (non-secret).
+snapshot_approle_role_id = "<vault approle role_id>"

@@ -188,3 +188,53 @@ chmod 600 /opt/spire/conf/server/server.conf
 systemctl daemon-reload
 systemctl enable spire-server
 systemctl restart spire-server
+
+# ── 7. Vault Raft snapshot → GCS (weekly) ────────────────────────────────────
+# Authenticates with the snapshot-saver AppRole (role_id from metadata, secret_id
+# from /opt/vault-snapshot/secret-id placed out-of-band). Writes to a fixed key;
+# the bucket keeps the last 3 versions (lifecycle rule in main.tf). The snapshot
+# is Vault's barrier-encrypted data, not plaintext.
+mkdir -p /opt/vault-snapshot
+chmod 0700 /opt/vault-snapshot
+
+cat > /usr/local/bin/vault-snapshot.sh <<'SNAP'
+#!/usr/bin/env bash
+set -euo pipefail
+md() { curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/$1"; }
+export VAULT_ADDR="https://127.0.0.1:8200" VAULT_CACERT="/opt/vault/tls/vault.crt"
+ROLE_ID="$(md instance/attributes/snapshot-approle-role-id)"
+BUCKET="$(md instance/attributes/snapshot-bucket)"
+SECRET_ID="$(cat /opt/vault-snapshot/secret-id)"
+VAULT_TOKEN="$(vault write -field=token auth/approle/login role_id="$ROLE_ID" secret_id="$SECRET_ID")"
+export VAULT_TOKEN
+vault operator raft snapshot save /tmp/vault.snap
+gcloud storage cp /tmp/vault.snap "gs://$BUCKET/vault.snap"
+rm -f /tmp/vault.snap
+SNAP
+chmod 0755 /usr/local/bin/vault-snapshot.sh
+
+cat > /etc/systemd/system/vault-snapshot.service <<'EOF'
+[Unit]
+Description=Vault Raft snapshot to GCS
+After=vault.service
+Wants=vault.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vault-snapshot.sh
+EOF
+
+cat > /etc/systemd/system/vault-snapshot.timer <<'EOF'
+[Unit]
+Description=Weekly Vault Raft snapshot
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now vault-snapshot.timer

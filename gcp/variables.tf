@@ -85,3 +85,8 @@ variable "trust_domain" {
   type        = string
   default     = "viaduct.gcp"
 }
+
+variable "snapshot_approle_role_id" {
+  description = "Vault AppRole role_id for the weekly snapshot job (non-secret). The secret_id is placed out-of-band in /opt/vault-snapshot/secret-id (0600) on the node."
+  type        = string
+}
