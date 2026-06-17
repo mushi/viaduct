@@ -23,6 +23,14 @@ resource "google_compute_subnetwork" "viaduct" {
   network       = google_compute_network.viaduct.id
 }
 
+# Static external IP: a stable control-plane endpoint for the agents and a
+# stable SAN for Vault's self-signed listener cert across instance rebuilds.
+# In-use cost is the same as an ephemeral IP.
+resource "google_compute_address" "controlplane" {
+  name   = "viaduct-controlplane-ip"
+  region = var.region
+}
+
 # ─── Firewall ────────────────────────────────────────────────────────────────
 resource "google_compute_firewall" "ssh" {
   name      = "viaduct-allow-ssh"
@@ -87,6 +95,15 @@ resource "google_kms_crypto_key_iam_member" "vault_unseal" {
   member        = "serviceAccount:${google_service_account.controlplane.email}"
 }
 
+# Vault's gcpckms seal also performs a cryptoKeys.get existence check at startup,
+# which cryptoKeyEncrypterDecrypter does not include. Grant read-only metadata
+# (scoped to this key).
+resource "google_kms_crypto_key_iam_member" "vault_unseal_viewer" {
+  crypto_key_id = google_kms_crypto_key.vault_unseal.id
+  role          = "roles/cloudkms.viewer"
+  member        = "serviceAccount:${google_service_account.controlplane.email}"
+}
+
 # ─── Vault Raft snapshot bucket (DURABLE) ────────────────────────────────────
 resource "google_storage_bucket" "vault_snapshots" {
   name                        = var.snapshot_bucket_name
@@ -127,7 +144,7 @@ resource "google_compute_instance" "controlplane" {
   network_interface {
     subnetwork = google_compute_subnetwork.viaduct.id
     access_config {
-      # Ephemeral external IPv4 (billed ~$0.005/hour).
+      nat_ip = google_compute_address.controlplane.address
     }
   }
 
@@ -137,9 +154,12 @@ resource "google_compute_instance" "controlplane" {
   }
 
   metadata = {
-    ssh-keys = "${var.ssh_user}:${var.ssh_public_key}"
+    ssh-keys       = "${var.ssh_user}:${var.ssh_public_key}"
+    startup-script = file("${path.module}/startup.sh")
+    region         = var.region
+    kms-keyring    = google_kms_key_ring.vault.name
+    kms-cryptokey  = google_kms_crypto_key.vault_unseal.name
+    vault-version  = var.vault_version
+    vault-addr-ip  = google_compute_address.controlplane.address
   }
-
-  # Phase 2: metadata.startup-script installs Vault (KMS unseal, Raft,
-  # scheduled snapshot->GCS) and SPIRE server.
 }

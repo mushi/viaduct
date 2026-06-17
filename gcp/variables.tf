@@ -59,3 +59,8 @@ variable "snapshot_bucket_name" {
   description = "Globally-unique name for the Vault Raft snapshot bucket."
   type        = string
 }
+
+variable "vault_version" {
+  description = "Vault apt package version to pin and hold (e.g. \"1.18.5-1\"). Verify the available version with `apt-cache madison vault` after adding the HashiCorp repo, or check HashiCorp releases."
+  type        = string
+}

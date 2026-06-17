@@ -15,3 +15,6 @@ agent_cidrs = []
 
 # Globally-unique GCS bucket name for Vault Raft snapshots.
 snapshot_bucket_name = "your-unique-vault-snapshot-bucket"
+
+# Vault apt package version to pin (verify: apt-cache madison vault).
+vault_version = "1.18.5-1"

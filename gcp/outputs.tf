@@ -1,6 +1,11 @@
 output "instance_external_ip" {
-  description = "Public IPv4 of the control-plane node."
-  value       = google_compute_instance.controlplane.network_interface[0].access_config[0].nat_ip
+  description = "Static public IPv4 of the control-plane node."
+  value       = google_compute_address.controlplane.address
+}
+
+output "vault_addr" {
+  description = "Vault API address. Set VAULT_ADDR to this; the listener cert is self-signed (VAULT_CACERT=/opt/vault/tls/vault.crt on the node)."
+  value       = "https://${google_compute_address.controlplane.address}:8200"
 }
 
 output "service_account_email" {
