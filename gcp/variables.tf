@@ -64,3 +64,24 @@ variable "vault_version" {
   description = "Vault apt package version to pin and hold (e.g. \"1.18.5-1\"). Verify the available version with `apt-cache madison vault` after adding the HashiCorp repo, or check HashiCorp releases."
   type        = string
 }
+
+variable "spire_version" {
+  description = "SPIRE release version, e.g. \"1.15.1\" (downloads the linux-amd64-musl tarball; musl builds are static and run on Ubuntu)."
+  type        = string
+}
+
+variable "spire_sha256" {
+  description = "SHA-256 of spire-<version>-linux-amd64-musl.tar.gz, from the GitHub release."
+  type        = string
+}
+
+variable "spire_approle_role_id" {
+  description = "Vault AppRole role_id for the SPIRE server (non-secret). The secret_id is placed out-of-band in a 0600 EnvironmentFile on the node."
+  type        = string
+}
+
+variable "trust_domain" {
+  description = "SPIFFE trust domain for this SPIRE server."
+  type        = string
+  default     = "viaduct.gcp"
+}
