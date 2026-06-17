@@ -1,5 +1,17 @@
-# Viaduct — Conduit + VLESS Station on Hetzner Cloud (Terraform)
+# Viaduct - Conduit + VLESS Station on Hetzner Cloud (Terraform)
 
+## What
+A complete Terraform project deploying a VLESS+Reality proxy ([Xray-core](https://github.com/XTLS/Xray-core)) and a Psiphon Conduit relay ([Psiphon Conduit](https://github.com/Psiphon-Inc/conduit), donating bandwidth to Psiphon users) on a single low-cost host, with metrics sent to Grafana Cloud.
+
+### VLESS
+End users connect with a client app — V2RayNG (Android), v2rayN (Windows), or Nekoray — that routes their device's traffic through the server. It works like a VPN for the user, though the underlying protocol is a proxy. This project generates connection URIs per user.
+
+### Conduit
+Conduit reaches users through Psiphon's broker even when the server's IP is blocked; the direct VLESS paths require the IP to be reachable.
+
+_Older tags (v0.1.0–v0.3.0) provide alternative deployable configurations._
+
+### Deployment
 Deploys a Hetzner CX23 server (~€4/month) running:
 
 | Service | Purpose |
@@ -46,11 +58,12 @@ All services run as unprivileged users under systemd. Ports 22, 80, 443, and 844
 ```
 
 Each user gets **two client URIs** (saved to `backups/clients/<name>.txt`):
-- **XHTTP URI** (`*-xhttp`) — connects to `example.com:8443` via Let's Encrypt TLS + HTTP/2. Use from Iran and regions where the server IP may be blocked.
+- **XHTTP URI** (`*-xhttp`) — connects to `example.com:8443` via Let's Encrypt TLS + HTTP/2. Use where the server IP is blocked but TLS to the domain on port 8443 is reachable.
 - **Reality URI** (`*-reality`) — connects directly to `server-ip:443`. Lower latency; use from anywhere the server IP is reachable.
 
-> **Iran note:** `example.com` must remain DNS-only (unproxied) in Cloudflare — the A record points directly to the server. Cloudflare is blocked in Iran; routing traffic through it would break XHTTP for Iranian users.
-
+> **DNS note:** for this version, `example.com` must be DNS-only (grey cloud) in Cloudflare, never proxied. XHTTP connects directly to the server's own TLS, so Cloudflare must stay out of the path. \
+> For regions where Cloudflare is reachable and you want to use Cloudflare proxying, see tag v0.2.0 (VLESS over Cloudflare + WebSocket).
+ 
 ## Prerequisites
 
 - [Terraform](https://developer.hashicorp.com/terraform/install) ≥ 1.3
@@ -75,7 +88,7 @@ Each user gets **two client URIs** (saved to `backups/clients/<name>.txt`):
 1. Sign up at grafana.com → create a stack
 2. Navigate to your stack → **Prometheus** → **Details**
 3. Note the **Remote Write Endpoint** URL and **Username**
-4. Go to your org → **Access Policies** → create a token with the **MetricsPublisher** role
+4. Go to your org → **Access Policies** → create an access policy scoped to **`metrics:write`**, then generate a token under it
 5. Import the Grafana dashboards (see [Dashboards](#dashboards) below)
 
 ### 3. Terraform
@@ -113,7 +126,7 @@ The dashboard shows:
 - Service status and uptime
 - Bandwidth by inbound (`vless_xhttp_in` = XHTTP/TLS, `vless_in` = Reality/direct)
 - Per-user uplink/downlink rates and totals (from `xray-user-stats`)
-- Active users in the last 24 hours
+- Active users in the selected time range (from `xray-user-stats`)
 
 ## Adding or revoking users
 
@@ -157,11 +170,11 @@ cloud-init runs fresh. The provisioner uploads:
                           (hosted Prometheus + Grafana)
 ```
 
-**xray-exporter** (compassvpn fork) scrapes Xray's gRPC Stats API and access log:
+**xray-exporter** (compassvpn fork) reads Xray's gRPC Stats API:
 - `xray_up`, `xray_uptime_seconds` — service health
 - `xray_traffic_uplink/downlink_bytes_total{dimension="inbound"}` — per-inbound bandwidth
-- `xray_unique_users` — users active in the last 24 hours (access log window)
-- `xray_countries_total`, `xray_cities_total`, `xray_asns_total` — connection geography
+
+> The exporter can also derive access-log metrics (`xray_unique_users`, `xray_countries_total`, `xray_cities_total`, `xray_asns_total`). They are **unavailable in this configuration**: the Xray access log is set to `none` so the server does not record client destinations (see [Security notes](#security-notes)). The two metrics above come from the Stats API and are unaffected.
 
 **xray-user-stats** (custom sidecar) queries the Xray Stats API directly:
 - `xray_user_uplink_bytes_total{user="..."}` — cumulative uplink per user
@@ -270,11 +283,12 @@ Note: KhajuBridge is not managed by Terraform and must be reapplied manually aft
 ## Security notes
 
 - `backups/` is gitignored. Store it in a password manager vault or encrypted drive.
-- The Alloy config contains your Grafana Cloud API key — treat it like a password.
+- The Alloy config contains your Grafana Cloud access-policy token — treat it like a password.
 - The Reality keypair is equivalent to a TLS private key — back it up and keep it private.
 - The Cloudflare API token only needs `Zone:DNS:Edit` permission. It is used solely by certbot for DNS-01 certificate renewal and is never exposed to client traffic.
 - Port 80 serves a static website intentionally — this defeats active probing (DPI systems that send HTTP GET requests to suspected proxy IPs will receive a legitimate-looking response).
 - Iranian IP ranges and domains are routed to a `block` outbound in Xray (`geoip:ir`, `geosite:category-ir`), preventing the server from proxying traffic back to Iranian infrastructure. This removes a potential fingerprinting signal.
+- The Xray access log is disabled (`"access": "none"`), so the server does not record which destinations users connect to. Per-user byte totals are unaffected — they come from the Stats API, not the access log.
 
 ## Teardown
 

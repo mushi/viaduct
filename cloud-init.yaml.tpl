@@ -447,12 +447,12 @@ write_files:
 
         cat > "$CLIENTS_DIR/$${USERNAME}.txt" <<EOF
       # ── VLESS+Reality URI for: $USERNAME ────────────────────────────────────
-      # Direct connection to server IP. Use OUTSIDE Iran.
+      # Direct connection to the server IP. Lower latency; works wherever the IP is reachable.
       # Server: $SERVER_IP:$REALITY_PORT | SNI spoof: $SNI
       $REALITY_URI
 
       # ── VLESS+XHTTP URI for: $USERNAME ──────────────────────────────────────
-      # HTTPS H2 transport via $DOMAIN. Use FROM Iran.
+      # TLS over HTTP/2 via $DOMAIN. Use where the server IP is blocked but the domain and port 8443 are reachable.
       # Server: $DOMAIN:8443 | Path: /api
       $XHTTP_URI
       EOF
