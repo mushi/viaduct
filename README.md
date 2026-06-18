@@ -1,7 +1,7 @@
 # Viaduct - Conduit + VLESS Station on Hetzner Cloud (Terraform)
 
 ## What
-A complete Terraform project deploying a VLESS+Reality proxy ([Xray-core](https://github.com/XTLS/Xray-core)) and a Psiphon Conduit relay ([Psiphon Conduit](https://github.com/Psiphon-Inc/conduit)), donating bandwidth to Psiphon users) on a single low-cost host, with metrics sent to Grafana Cloud.
+A complete Terraform project deploying a VLESS+Reality proxy ([Xray-core](https://github.com/XTLS/Xray-core)) and a Psiphon Conduit relay ([Psiphon Conduit](https://github.com/Psiphon-Inc/conduit), donating bandwidth to Psiphon users) on a single low-cost host, with metrics sent to Grafana Cloud.
 
 ### VLESS
 End users connect with a client app - e.g. V2RayNG (Android), v2rayN (Windows), or Nekoray - that routes their device's traffic through the server. It works like a VPN for the user, though the underlying protocol is a proxy. This project generates connection URIs per user.
