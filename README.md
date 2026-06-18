@@ -13,10 +13,10 @@ Three nodes, each a separate Terraform root:
 3. **GCP** — the control plane: Vault (secrets management) and the SPIRE server
    (workload attestation) that the other two nodes authenticate to.
 ### VLESS
-End users connect with a client app — V2RayNG (Android), v2rayN (Windows), or Nekoray — that routes their device's traffic through the server. It works like a VPN for the user, though the underlying protocol is a proxy. This project generates connection URIs per user.
+End users connect with a client app - e.g. V2RayNG (Android), v2rayN (Windows), or Nekoray - that routes their device's traffic through the server. It works like a VPN for the user, though the underlying protocol is a proxy. This project generates connection URIs per user.
 
 ### Conduit
-Conduit reaches users through Psiphon's broker even when the server's IP is blocked; the direct VLESS paths require the IP to be reachable.
+Conduit serves bandwidth to users through Psiphon's broker even when the server's IP is blocked; the direct VLESS paths require the IP to be reachable.
 
 _Older tags (v0.1.0–v0.3.0) provide alternative deployable configurations._
 
@@ -39,7 +39,7 @@ All services run as unprivileged users under systemd. Ports 22, 80, 443, and 844
 ```
 ┌──────────────────────────────── Clients ─────────────────────────────────┐
 │                                                                          │
-│  Iran / blocked regions                  Direct (anywhere)               │
+│  Direct (anywhere)                       Iran / blocked regions          │
 │  VLESS+XHTTP+TLS                         VLESS+Reality+TCP               │
 │  → example.com:8443                        → server-ip:443               │
 └────────────────────────────────────┬──────────────────┬──────────────────┘
