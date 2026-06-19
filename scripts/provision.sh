@@ -175,6 +175,39 @@ else
   log "WARNING: one or more services failed to start. Check: journalctl -u conduit -u xray -u xray-exporter -u xray-user-stats -u alloy -u nginx"
 fi
 
+# ── 8b. SPIRE agent: trust bundle + join token from the GCP SPIRE server ──────
+# Optional — only runs when GCP_SERVER_IP is set (the multi-cloud lab). The
+# agent binary, config, and unit are installed by cloud-init; here we fetch the
+# bundle + a one-time join token from the GCP SPIRE server and start the agent.
+# GCP must be deployed (SPIRE server running) before Hetzner.
+
+if [[ -n "${GCP_SERVER_IP:-}" ]]; then
+  if remote "systemctl is-active --quiet spire-agent" 2>/dev/null; then
+    log "SPIRE agent already running — skipping attestation."
+  else
+    log "Fetching SPIRE trust bundle + join token from GCP server ${GCP_SERVER_IP}..."
+    GCP_KEY="${GCP_SSH_KEY_PATH/#\~/$HOME}"
+    GCP_OPTS=(-i "${GCP_KEY}" -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=30 -o LogLevel=ERROR)
+    # Drop any stale host key (the GCP node may have been rebuilt with a new one).
+    ssh-keygen -R "${GCP_SERVER_IP}" >/dev/null 2>&1 || true
+    GCP_SSH=(ssh "${GCP_OPTS[@]}" "${GCP_SSH_USER}@${GCP_SERVER_IP}")
+
+    "${GCP_SSH[@]}" -- "sudo spire-server bundle show" > "${CONTROL_DIR}/bundle.crt"
+    TOKEN=$("${GCP_SSH[@]}" -- "sudo spire-server token generate -spiffeID spiffe://${TRUST_DOMAIN}/hetzner -ttl 600" | awk '/Token:/{print $2}')
+    [[ -n "$TOKEN" ]] || { log "ERROR: failed to mint SPIRE join token from GCP server."; exit 1; }
+
+    upload "${CONTROL_DIR}/bundle.crt" "/opt/spire/agent/bootstrap.crt" "644"
+    remote "umask 077; printf 'JOIN_TOKEN_ARG=-joinToken %s\n' '$TOKEN' > /opt/spire/agent/join.env"
+    remote "systemctl daemon-reload && systemctl enable --now spire-agent"
+    sleep 3
+    if remote "systemctl is-active --quiet spire-agent"; then
+      log "SPIRE agent attested and running."
+    else
+      log "WARNING: spire-agent failed to start. Check: journalctl -u spire-agent"
+    fi
+  fi
+fi
+
 # ── 9. Download fresh backups ─────────────────────────────────────────────────
 
 log "Downloading updated backups..."

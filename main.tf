@@ -118,6 +118,10 @@ resource "hcloud_server" "conduit" {
     xray_exporter_version = var.xray_exporter_version
     alloy_version         = var.alloy_version
     alloy_zip_sha256      = var.alloy_zip_sha256
+    spire_agent_version   = var.spire_agent_version
+    spire_agent_sha256    = var.spire_agent_sha256
+    gcp_spire_server_ip   = var.gcp_spire_server_ip
+    trust_domain          = var.trust_domain
   })
 
   labels = { role = "conduit-station" }
@@ -141,7 +145,7 @@ resource "local_file" "users_txt" {
 resource "local_file" "alloy_config" {
   filename        = "${path.module}/backups/alloy-config.alloy"
   file_permission = "0600"
-  content         = templatefile("${path.module}/alloy-config.alloy.tpl", {
+  content = templatefile("${path.module}/alloy-config.alloy.tpl", {
     grafana_cloud_url      = var.grafana_cloud_prometheus_url
     grafana_cloud_user     = var.grafana_cloud_prometheus_user
     grafana_cloud_password = var.grafana_cloud_api_key
@@ -179,6 +183,13 @@ resource "null_resource" "provision" {
       BACKUPS_DIR  = "${path.module}/backups"
       USERS_FILE   = local_file.users_txt.filename
       ALLOY_CONFIG = local_file.alloy_config.filename
+
+      # SPIRE agent: provisioner fetches the trust bundle + a join token from
+      # the GCP SPIRE server. GCP must be deployed (SPIRE server running) first.
+      GCP_SERVER_IP    = var.gcp_spire_server_ip
+      GCP_SSH_KEY_PATH = var.gcp_ssh_key_path
+      GCP_SSH_USER     = var.gcp_ssh_user
+      TRUST_DOMAIN     = var.trust_domain
     }
   }
 

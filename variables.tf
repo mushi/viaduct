@@ -115,14 +115,14 @@ variable "grafana_cloud_prometheus_user" {
 
 variable "grafana_cloud_api_key" {
   description = "Grafana Cloud API key with MetricsPublisher role. Generate at grafana.com → your org → Access Policies."
-  type      = string
-  sensitive = true
+  type        = string
+  sensitive   = true
 }
 
 variable "cloudflare_api_token" {
   description = "Cloudflare API token for certbot DNS-01 challenge. Create at dash.cloudflare.com → My Profile → API Tokens with Zone:DNS:Edit permission for the vless_domain zone."
-  type      = string
-  sensitive = true
+  type        = string
+  sensitive   = true
 }
 
 # ── Binary checksums ──────────────────────────────────────────────────────────
@@ -147,4 +147,45 @@ variable "xray_zip_sha256" {
 variable "alloy_zip_sha256" {
   description = "SHA-256 of alloy-linux-amd64.zip for the pinned alloy_version. Run scripts/get-checksums.sh to obtain."
   type        = string
+}
+
+# ── SPIRE agent (multi-cloud lab) ─────────────────────────────────────────────
+# This node runs a SPIRE agent that attests (via join_token) to the SPIRE
+# server on the GCP control plane (the `gcp/` root). Leave gcp_spire_server_ip
+# empty to skip SPIRE entirely (plain Conduit/VLESS deploy).
+
+variable "spire_agent_version" {
+  description = "SPIRE release version for the agent binary (e.g. 1.15.1)."
+  type        = string
+  default     = "1.15.1"
+}
+
+variable "spire_agent_sha256" {
+  description = "SHA-256 of spire-<version>-linux-amd64-musl.tar.gz for the pinned spire_agent_version."
+  type        = string
+  default     = ""
+}
+
+variable "gcp_spire_server_ip" {
+  description = "Public IP of the GCP SPIRE server. Empty disables the SPIRE agent. Deploy the gcp/ root first to obtain it."
+  type        = string
+  default     = ""
+}
+
+variable "gcp_ssh_key_path" {
+  description = "Local path to the SSH private key for the GCP SPIRE server (used by the provisioner to mint a join token)."
+  type        = string
+  default     = "~/.ssh/viaduct_lab"
+}
+
+variable "gcp_ssh_user" {
+  description = "SSH user on the GCP SPIRE server."
+  type        = string
+  default     = "viaduct"
+}
+
+variable "trust_domain" {
+  description = "SPIFFE trust domain of the GCP SPIRE server this agent joins."
+  type        = string
+  default     = "viaduct.gcp"
 }

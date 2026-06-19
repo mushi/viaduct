@@ -714,6 +714,54 @@ runcmd:
   - rm -f /etc/nginx/sites-enabled/default
   - nginx -t
 
+  # ── SPIRE agent binary + config (lab: joins the GCP SPIRE server) ─────────
+  # The trust bundle (/opt/spire/agent/bootstrap.crt) and a one-time join token
+  # (/opt/spire/agent/join.env) are supplied by the provisioner, which fetches
+  # them from the GCP SPIRE server. The unit is enabled+started there, not here.
+  - |
+    curl -fsSL \
+      "https://github.com/spiffe/spire/releases/download/v${spire_agent_version}/spire-${spire_agent_version}-linux-amd64-musl.tar.gz" \
+      -o /tmp/spire.tar.gz
+    echo "${spire_agent_sha256}  /tmp/spire.tar.gz" | sha256sum --check --strict - \
+      || { echo "FATAL: SPIRE agent checksum mismatch — aborting"; exit 1; }
+    tar -xzf /tmp/spire.tar.gz -C /tmp
+    install -m0755 /tmp/spire-${spire_agent_version}/bin/spire-agent /usr/local/bin/spire-agent
+    rm -rf /tmp/spire.tar.gz /tmp/spire-${spire_agent_version}
+    mkdir -p /opt/spire/agent/data
+  - |
+    cat > /opt/spire/agent/agent.conf <<'AGENT_CONF'
+    agent {
+      data_dir          = "/opt/spire/agent/data"
+      log_level         = "INFO"
+      server_address    = "${gcp_spire_server_ip}"
+      server_port       = "8081"
+      trust_domain      = "${trust_domain}"
+      trust_bundle_path = "/opt/spire/agent/bootstrap.crt"
+      socket_path       = "/run/spire-agent/public/api.sock"
+    }
+    plugins {
+      NodeAttestor "join_token" { plugin_data {} }
+      KeyManager "disk" { plugin_data { directory = "/opt/spire/agent/data" } }
+      WorkloadAttestor "unix" { plugin_data {} }
+    }
+    AGENT_CONF
+  - |
+    cat > /etc/systemd/system/spire-agent.service <<'AGENT_UNIT'
+    [Unit]
+    Description=SPIRE Agent
+    After=network-online.target
+    Wants=network-online.target
+
+    [Service]
+    EnvironmentFile=-/opt/spire/agent/join.env
+    ExecStart=/usr/local/bin/spire-agent run -config /opt/spire/agent/agent.conf $JOIN_TOKEN_ARG
+    Restart=on-failure
+    RestartSec=5
+
+    [Install]
+    WantedBy=multi-user.target
+    AGENT_UNIT
+
   # ── Register units (do NOT start — provisioner does that) ─────────────────
   - systemctl daemon-reload
   - systemctl enable conduit.service xray.service xray-exporter.service xray-user-stats.service alloy.service nginx.service

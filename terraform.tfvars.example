@@ -52,3 +52,14 @@ conduit_sha256   = ""   # obtain via scripts/get-checksums.sh
 xray_zip_sha256  = ""   # obtain via scripts/get-checksums.sh
 alloy_zip_sha256 = ""   # obtain via scripts/get-checksums.sh
 # xray-exporter is verified at runtime against the release's checksums file
+
+# ── SPIRE agent (multi-cloud lab — optional) ──────────────────────────────────
+# This node attests (join_token) to the SPIRE server in the gcp/ root. Deploy
+# gcp/ FIRST, then set gcp_spire_server_ip below. Leave it empty to skip SPIRE.
+# spire_agent_sha256: sha256 of spire-<version>-linux-amd64-musl.tar.gz.
+# spire_agent_version  = "1.15.1"
+# spire_agent_sha256   = "e1b58f9f52f601dc35c3b56bad4c810dfb7faf50c8531bcecdb4f64ae3cc007a"
+# gcp_spire_server_ip  = ""                    # public IP of the GCP SPIRE server (from `terraform output` in gcp/)
+# gcp_ssh_key_path     = "~/.ssh/viaduct_lab"
+# gcp_ssh_user         = "viaduct"
+# trust_domain         = "viaduct.gcp"
