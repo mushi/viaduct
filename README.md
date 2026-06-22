@@ -314,7 +314,8 @@ Configuration, scripts and documentation co-authored with [Claude](https://claud
 ## Disclaimer
 
 This repository contains personal infrastructure-as-code for deploying a
-censorship-circumvention node. It is published for educational and transparency
-purposes. It is not an operated service — this repository provides no
-infrastructure, access, or credentials. Anyone who deploys their own instance is
-solely responsible for complying with all applicable laws and regulations.
+node that could be used to circumvent censorship. It is published for
+educational and transparency purposes. It is not an operated service —
+this repository provides no infrastructure, access, or credentials.
+Anyone who deploys their own instance is solely responsible for complying
+with all applicable laws and regulations.
