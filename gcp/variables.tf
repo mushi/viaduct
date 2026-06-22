@@ -55,6 +55,18 @@ variable "agent_cidrs" {
   default     = []
 }
 
+variable "federation_cidrs" {
+  description = "CIDR(s) allowed to reach the SPIRE federation bundle endpoint (8443): the AWS SPIRE server IP /32. Separate from agent_cidrs so federation does not also open Vault/8081. Empty disables the rule."
+  type        = list(string)
+  default     = []
+}
+
+variable "aws_spire_ip" {
+  description = "AWS SPIRE server IP for cross-cloud federation (federates_with viaduct.aws). Empty omits the federation block from the generated SPIRE server config (standalone deploy)."
+  type        = string
+  default     = ""
+}
+
 variable "snapshot_bucket_name" {
   description = "Globally-unique name for the Vault Raft snapshot bucket."
   type        = string

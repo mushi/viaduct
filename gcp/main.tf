@@ -63,6 +63,24 @@ resource "google_compute_firewall" "controlplane" {
   target_tags   = ["viaduct-controlplane"]
 }
 
+# SPIRE federation bundle endpoint (8443), restricted to the AWS SPIRE server IP.
+# Deliberately a separate rule from controlplane so opening federation does NOT
+# also expose Vault (8200) or the SPIRE agent API (8081) to the AWS node.
+resource "google_compute_firewall" "federation" {
+  count     = length(var.federation_cidrs) > 0 ? 1 : 0
+  name      = "viaduct-allow-federation"
+  network   = google_compute_network.viaduct.name
+  direction = "INGRESS"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["8443"]
+  }
+
+  source_ranges = var.federation_cidrs
+  target_tags   = ["viaduct-controlplane"]
+}
+
 # ─── Service account (instance identity; no static key) ──────────────────────
 resource "google_service_account" "controlplane" {
   account_id   = "viaduct-controlplane"
@@ -166,7 +184,7 @@ resource "google_compute_instance" "controlplane" {
 
   metadata = {
     ssh-keys       = "${var.ssh_user}:${var.ssh_public_key}"
-    startup-script = file("${path.module}/startup.sh")
+    startup-script = file("${path.module}/scripts/startup.sh")
     region         = var.region
     kms-keyring    = google_kms_key_ring.vault.name
     kms-cryptokey  = google_kms_crypto_key.vault_unseal.name
@@ -177,6 +195,7 @@ resource "google_compute_instance" "controlplane" {
     spire-sha256          = var.spire_sha256
     spire-approle-role-id = var.spire_approle_role_id
     trust-domain          = var.trust_domain
+    aws-spire-ip          = var.aws_spire_ip
 
     snapshot-approle-role-id = var.snapshot_approle_role_id
     snapshot-bucket          = google_storage_bucket.vault_snapshots.name

@@ -1,0 +1,123 @@
+# Source: spire-agent/templates/csi-serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spiffe-csi-driver
+  namespace: spire
+
+---
+
+# Source: spire-agent/templates/spiffe-csi-driver.yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spiffe-csi-driver
+  namespace: spire
+  labels:
+    app: spiffe-csi-driver
+spec:
+  selector:
+    matchLabels:
+      app: spiffe-csi-driver
+  template:
+    metadata:
+      namespace: spire
+      labels:
+        app: spiffe-csi-driver
+    spec:
+      serviceAccountName: spiffe-csi-driver
+      containers:
+        - name: spiffe-csi-driver
+          image: ghcr.io/spiffe/spiffe-csi-driver:0.2.9
+          imagePullPolicy: IfNotPresent
+          args: [
+            "-workload-api-socket-dir", "/spire-agent-socket",
+            "-csi-socket-path", "/spiffe-csi/csi.sock",
+          ]
+          env:
+            # The CSI driver needs a unique node ID. Using Node name.
+            - name: MY_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            # The volume containing the SPIRE agent socket. The SPIFFE CSI
+            # driver will mount this directory into containers.
+            - mountPath: /spire-agent-socket
+              name: spire-agent-socket-dir
+              readOnly: true
+            # The volume that will contain the CSI driver socket shared
+            # with the kubelet and the driver registrar.
+            - mountPath: /spiffe-csi
+              name: spiffe-csi-socket-dir
+            # The volume containing mount points for containers.
+            - mountPath: /var/lib/kubelet/pods
+              mountPropagation: Bidirectional
+              name: mountpoint-dir
+          securityContext:
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - all
+            privileged: true
+        # This container runs the CSI Node Driver Registrar
+        # required to register a CSI driver with the kubelet.
+        - name: node-driver-registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.6.0
+          imagePullPolicy: IfNotPresent
+          args: [
+            "-csi-address", "/spiffe-csi/csi.sock",
+            "-kubelet-registration-path", "/var/lib/kubelet/plugins/csi.spiffe.io/csi.sock",
+          ]
+          volumeMounts:
+            # The registrar needs access to the SPIFFE CSI driver socket
+            - mountPath: /spiffe-csi
+              name: spiffe-csi-socket-dir
+            # and to the Kubelet plugin registration directory
+            - name: kubelet-plugin-registration-dir
+              mountPath: /registration
+      volumes:
+        # Used to share the Workload API socket between the CSI
+        # driver and SPIRE agent.
+        - name: spire-agent-socket-dir
+          hostPath:
+            path: /run/spire-agent/public
+            type: DirectoryOrCreate
+        # For socket used for kubelet->driver communication
+        - name: spiffe-csi-socket-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/csi.spiffe.io
+            type: DirectoryOrCreate
+        # For mounting SPIFFE CSI driver
+        - name: mountpoint-dir
+          hostPath:
+            path: /var/lib/kubelet/pods
+            type: Directory
+        # For the node-driver-registrar to register the plugin
+        # with kubelet
+        - name: kubelet-plugin-registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+---
+
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: "csi.spiffe.io"
+spec:
+  # Only ephemeral, inline volumes are supported. No need for a
+  # controller to provision and attach volumes.
+  attachRequired: false
+
+  # Request the pod information used by the CSI driver to verify that an
+  # ephemeral mount was requested.
+  podInfoOnMount: true
+
+  # Don't change ownership on the contents of the mount since the Workload API
+  # Unix Domain Socket is typically open to all (i.e. 0777).
+  fsGroupPolicy: None
+
+  # Only support ephemeral volumes.
+  volumeLifecycleModes:
+    - Ephemeral

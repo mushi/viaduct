@@ -1,0 +1,57 @@
+# Egress-capped Conduit relay (to stay within free-tier data limits),
+# build-less: initContainer fetches the checksum-pinned static
+# arm64 binary, main container runs it. PVC persists the conduit station identity across restarts
+# (keeps broker reputation). Egress bounded at the peak by --bandwidth/--max-common-clients,
+# at the monthly total by the host egress-guardrail timer.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: conduit-data, namespace: viaduct }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources: { requests: { storage: 1Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: conduit, namespace: viaduct }
+spec:
+  replicas: 1
+  strategy: { type: Recreate } # RWO PVC — never two pods at once
+  selector: { matchLabels: { app: conduit } }
+  template:
+    metadata: { labels: { app: conduit } }
+    spec:
+      initContainers:
+      - name: fetch-conduit
+        image: alpine:3.20
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -e
+          apk add --no-cache curl >/dev/null
+          curl -fsSL -o /shared/conduit https://github.com/Psiphon-Inc/conduit/releases/download/release-cli-2.0.0/conduit-linux-arm64
+          echo "38d5505fc1c25127af5ec18faafd736f64bc0b84bc1cec3017b35485107adc29  /shared/conduit" | sha256sum -c -
+          chmod +x /shared/conduit
+        volumeMounts: [{ name: shared, mountPath: /shared }]
+      containers:
+      - name: conduit
+        image: alpine:3.20
+        command: ["/shared/conduit", "start", "--data-dir", "/data", "--bandwidth", "15", "--max-common-clients", "5", "--metrics-addr", ":9090"]
+        ports: [{ name: metrics, containerPort: 9090 }]
+        resources:
+          requests: { memory: 64Mi, cpu: 100m }
+          limits: { memory: 256Mi }
+        volumeMounts:
+        - { name: shared, mountPath: /shared }
+        - { name: data, mountPath: /data }
+      volumes:
+      - { name: shared, emptyDir: {} }
+      - { name: data, persistentVolumeClaim: { claimName: conduit-data } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: conduit-metrics, namespace: viaduct }
+spec:
+  selector: { app: conduit }
+  ports: [{ name: metrics, port: 9090, targetPort: 9090 }]

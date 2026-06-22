@@ -1,0 +1,23 @@
+region = "ap-south-1" # Mumbai
+
+# SSH public key content (not a path), e.g. contents of ~/.ssh/viaduct_lab.pub
+ssh_public_key = "ssh-ed25519 AAAA... your-key-here"
+
+# GCP SPIRE server IP /32, added in A3 once federation is wired. Empty disables
+# the bundle-endpoint ingress rule.
+federation_cidrs = []
+
+trust_domain = "viaduct.aws"
+
+# SPIRE server (filled in A2). NOTE: arm64 tarball for Graviton.
+spire_version = "1.15.1"
+spire_sha256  = "<sha256 of spire-1.15.1-linux-arm64-musl.tar.gz>"
+
+# Cross-cloud federation (deploy gcp/ first to obtain these)
+gcp_control_plane_ip  = "203.0.113.10"   # GCP control-plane IP (Vault :8200 + SPIRE bundle :8443)
+gcp_vault_fingerprint = "<openssl x509 -in /opt/vault/tls/vault.crt -noout -fingerprint -sha256 on the GCP box>"
+
+# ── Optional ────────────────────────────────────────────────────────
+# Restrict SSH to your own IP /32. Find it at https://ifconfig.me
+# either uncomment below or export TF_VAR_admin_cidr='["203.0.113.10/32"]' for use in all terraform roots
+# admin_cidr = ["203.0.113.10/32"]

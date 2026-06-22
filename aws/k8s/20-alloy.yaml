@@ -1,0 +1,98 @@
+# Grafana Alloy: scrapes Conduit (:9090) + host metrics (unix exporter: netdev +
+# the egress-guardrail textfile), remote_writes to Grafana Cloud tagged node="aws".
+#
+# Grafana token is fetched cross-cloud from GCP Vault at startup
+# and writes the Alloy config (token inline) to a RAM-only volume
+# (emptyDir medium:Memory). Token is long-lived, so
+# the SVID is only needed at startup, so no continuous vault-agent sidecar needed.
+#
+# __GCP_CONTROL_PLANE_IP__ is substituted by startup.sh (real IP kept out of the repo).
+# Depends on: the vault-ca ConfigMap + the spiffe://viaduct.aws/vault-agent SPIRE entry
+# (both host-created at deploy — see README).
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: alloy, namespace: viaduct }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: alloy } }
+  template:
+    metadata: { labels: { app: alloy } }
+    spec:
+      serviceAccountName: vault-agent
+      securityContext: { runAsUser: 0 }
+      initContainers:
+      - name: fetch-svid
+        image: ghcr.io/spiffe/spire-agent:1.15.1
+        command: ["/opt/spire/bin/spire-agent", "api", "fetch", "x509", "-socketPath", "/spiffe-workload-api/api.sock", "-write", "/svids"]
+        volumeMounts:
+        - { name: spiffe-workload-api, mountPath: /spiffe-workload-api, readOnly: true }
+        - { name: svids, mountPath: /svids }
+      - name: render-config
+        image: hashicorp/vault:2.0.2
+        env:
+        - { name: VAULT_ADDR, value: "https://__GCP_CONTROL_PLANE_IP__:8200" }
+        - { name: VAULT_CACERT, value: "/vault-ca/vault-ca.crt" }
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -e
+          vault login -method=cert -client-cert=/svids/svid.0.pem -client-key=/svids/svid.0.key name=aws-vault-agent >/dev/null
+          U=$(vault kv get -field=prometheus_user kv/aws/grafana)
+          K=$(vault kv get -field=api_key kv/aws/grafana)
+          URL=$(vault kv get -field=prometheus_url kv/aws/grafana)
+          cat > /rendered/config.alloy <<CFG
+          prometheus.exporter.unix "node" {
+            procfs_path    = "/host/proc"
+            sysfs_path     = "/host/sys"
+            set_collectors = ["netdev","meminfo","loadavg","textfile"]
+            textfile { directory = "/host/textfile" }
+          }
+          prometheus.scrape "node" {
+            targets    = prometheus.exporter.unix.node.targets
+            forward_to = [prometheus.remote_write.grafana.receiver]
+            job_name   = "node"
+          }
+          prometheus.scrape "conduit" {
+            targets    = [{"__address__" = "conduit-metrics.viaduct.svc.cluster.local:9090"}]
+            forward_to = [prometheus.remote_write.grafana.receiver]
+            job_name   = "conduit"
+          }
+          prometheus.remote_write "grafana" {
+            endpoint {
+              url = "$URL"
+              basic_auth {
+                username = "$U"
+                password = "$K"
+              }
+            }
+            external_labels = { node = "aws" }
+          }
+          CFG
+          echo "rendered config.alloy"
+        volumeMounts:
+        - { name: svids, mountPath: /svids }
+        - { name: vault-ca, mountPath: /vault-ca }
+        - { name: rendered, mountPath: /rendered }
+      containers:
+      - name: alloy
+        image: grafana/alloy:v1.8.3
+        args: ["run", "/rendered/config.alloy", "--storage.path=/tmp/alloy", "--server.http.listen-addr=0.0.0.0:12345"]
+        resources:
+          requests: { memory: 96Mi, cpu: 100m }
+          limits: { memory: 256Mi }
+        volumeMounts:
+        - { name: rendered, mountPath: /rendered }
+        - { name: alloy-tmp, mountPath: /tmp/alloy }
+        - { name: host-proc, mountPath: /host/proc, readOnly: true }
+        - { name: host-sys, mountPath: /host/sys, readOnly: true }
+        - { name: host-txt, mountPath: /host/textfile, readOnly: true }
+      volumes:
+      - { name: spiffe-workload-api, csi: { driver: csi.spiffe.io, readOnly: true } }
+      - { name: svids, emptyDir: { medium: Memory } }
+      - { name: rendered, emptyDir: { medium: Memory } }
+      - { name: alloy-tmp, emptyDir: {} }
+      - { name: vault-ca, configMap: { name: vault-ca } }
+      - { name: host-proc, hostPath: { path: /proc } }
+      - { name: host-sys, hostPath: { path: /sys } }
+      - { name: host-txt, hostPath: { path: /var/lib/viaduct-textfile } }

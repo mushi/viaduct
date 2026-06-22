@@ -1,4 +1,4 @@
-# Vault restore after an instance rebuild
+# Vault restore from snapshot after an instance rebuild
 
 The control-plane boot disk is ephemeral: a rebuilt instance starts with an empty
 Vault Raft store. Restore from the latest GCS snapshot.
@@ -34,12 +34,13 @@ last 3 versions retained.
 
 5. Restore (force), using the temp root token:
    ```sh
-   VAULT_TOKEN=<temp-root> vault operator raft snapshot restore -force /tmp/vault.snap
+   read -rsp 'temp root token: ' VAULT_TOKEN; export VAULT_TOKEN; echo   # off the command line / history
+   vault operator raft snapshot restore -force /tmp/vault.snap
    rm -f /tmp/vault.snap
    ```
 
 6. Vault now holds the restored data. Authenticate with your **original** root
-   token / recovery keys from 1Password — the temp init token from step 3 is
+   token / recovery keys from the safe place where you stored them — the temp init token from step 3 is
    invalidated by the restore.
 
 7. Re-place the AppRole secret_ids (the on-disk files were on the ephemeral disk;
@@ -60,6 +61,33 @@ last 3 versions retained.
    ```
 
 ## Note
-The PKI root CA private key is the critical durable asset. As long as snapshots
-exist (or the root CA is otherwise backed up), a rebuild is recoverable without
-re-issuing the trust bundle to agents.
+The PKI root CA private key (in Vault) is the critical durable asset. Because the snapshot
+restores it, the rebuilt SPIRE server's new intermediate chains to the **same** root — so
+agents keep trusting the trust domain and don't need a new CA bundle.
+
+## SPIRE state after a rebuild
+The Vault snapshot does **not** contain SPIRE server state. SPIRE's datastore
+(`/opt/spire/data/server/datastore.sqlite3` — registration entries + federated bundles) and
+its KeyManager keys (`keys.json`) live on the **ephemeral boot disk** and are lost on a
+rebuild. After the Vault restore above, also:
+
+1. **Re-import the AWS federated bundle** (TOFU, as in first-time federation). GCP's own
+   bundle is unchanged (same root), so the AWS side needs nothing:
+   ```sh
+   curl -sk https://<aws-ip>:8443 | sudo spire-server bundle set -format spiffe -id spiffe://viaduct.aws
+   ```
+2. **Recreate registration entries**, e.g. the Hetzner workload:
+   ```sh
+   sudo spire-server entry create \
+     -parentID spiffe://viaduct.gcp/hetzner \
+     -spiffeID spiffe://viaduct.gcp/hetzner/vault-agent \
+     -selector unix:uid:994 -dns vault-agent.hetzner
+   ```
+3. **Re-attest the Hetzner agent** — its `join_token` is single-use and its server-side
+   record is gone. Issue a fresh token and restart `spire-agent` on Hetzner:
+   ```sh
+   sudo spire-server token generate -spiffeID spiffe://viaduct.gcp/hetzner
+   ```
+
+For a lab this manual recovery is fine; to avoid it, put `/opt/spire/data` on a persistent
+disk or back the datastore up alongside the Vault snapshot.

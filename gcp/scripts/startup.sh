@@ -6,9 +6,8 @@
 #
 # It installs and configures Vault (Raft storage, GCP KMS auto-unseal) and
 # starts it SEALED + UNINITIALISED. The operator then runs `vault operator init`
-# once over SSH and stores the recovery keys + root token in 1Password. Vault
-# auto-unseals via KMS thereafter. SPIRE server and the snapshot timer come in
-# later phases.
+# once over SSH and stores the recovery keys + root token in a safe place offline
+# (e.g. a password manager). Vault auto-unseals via KMS thereafter.
 set -euo pipefail
 
 md() { curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/$1"; }
@@ -117,6 +116,30 @@ mkdir -p /opt/spire/conf/server /opt/spire/data/server
 # Public Vault CA cert, readable by spire (UpstreamAuthority TLS verification).
 install -m 0644 /opt/vault/tls/vault.crt /opt/spire/conf/server/vault-ca.crt
 
+# Cross-cloud SPIRE federation with viaduct.aws. Built here (not just live) because
+# GCP regenerates server.conf on every boot — without this a reboot drops federation.
+# Only emitted when the AWS SPIRE server IP is provided (standalone deploys stay clean).
+AWS_SPIRE_IP="$(md instance/attributes/aws-spire-ip || true)"
+FEDERATION_BLOCK=""
+if [ -n "$AWS_SPIRE_IP" ]; then
+  FEDERATION_BLOCK=$(cat <<FED
+
+  federation {
+    bundle_endpoint {
+      address = "0.0.0.0"
+      port    = 8443
+    }
+    federates_with "viaduct.aws" {
+      bundle_endpoint_url = "https://${AWS_SPIRE_IP}:8443"
+      bundle_endpoint_profile "https_spiffe" {
+        endpoint_spiffe_id = "spiffe://viaduct.aws/spire/server"
+      }
+    }
+  }
+FED
+)
+fi
+
 cat > /opt/spire/conf/server/server.conf <<EOF
 server {
   bind_address          = "0.0.0.0"
@@ -126,6 +149,7 @@ server {
   log_level             = "INFO"
   ca_ttl                = "168h"
   default_x509_svid_ttl = "1h"
+${FEDERATION_BLOCK}
 }
 
 plugins {

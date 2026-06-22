@@ -1,0 +1,45 @@
+# Namespaces + RBAC for the AWS node.
+# spire ns: SA + token for the host agent's k8s WorkloadAttestor (kubelet /pods);
+#   startup.sh decodes the Secret to /opt/spire/conf/agent/k8s-sa-token.
+# viaduct ns: workloads (conduit, alloy). SA vault-agent maps via a SPIRE entry to
+#   spiffe://viaduct.aws/vault-agent, which GCP Vault's cert-auth trusts.
+---
+apiVersion: v1
+kind: Namespace
+metadata: { name: spire }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: spire-agent, namespace: spire }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: spire-agent-kubelet }
+rules:
+- apiGroups: [""]
+  resources: ["pods", "nodes", "nodes/proxy"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: spire-agent-kubelet }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: spire-agent-kubelet }
+subjects:
+- { kind: ServiceAccount, name: spire-agent, namespace: spire }
+---
+# Long-lived SA token for the host k8s WorkloadAttestor (k8s 1.24+ needs an explicit Secret; it's read-only, 0600 root).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: spire-agent-token
+  namespace: spire
+  annotations: { kubernetes.io/service-account.name: spire-agent }
+type: kubernetes.io/service-account-token
+---
+apiVersion: v1
+kind: Namespace
+metadata: { name: viaduct }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: vault-agent, namespace: viaduct }

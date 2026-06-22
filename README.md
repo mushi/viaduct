@@ -1,309 +1,220 @@
-# Viaduct - Conduit + VLESS Station on Multiple Clouds (Terraform)
+# Viaduct — multi-cloud SPIFFE/SPIRE + Vault lab (Terraform)
+
+> This branch, `lab-multicloud-spire`, is a **three-cloud deployment** that runs a
+> bandwidth donation data plane (VLESS+Reality and Psiphon Conduit) with cross-cloud
+> **workload identity** (federated SPIRE) and **centralized secrets** (Vault). The data
+> plane is the same service the `main` branch provides single-node; this branch adds 
+> a second cloud node (running an egress-constrained Conduit, no VLESS) and a control plane to exercise cross-cloud identity and secrets
+> management. This adds nothing for users. It is useful if you want to see SPIFFE/SPIRE
+> and Vault in action. For the simpler single-node station deployment, see **`main`**.
+
+
+The total cost for all resources across the three clouds is ≈ $14/month USD *before end of 2026* (using an AWS t4g free trial). 
+Do reconfirm the costs before running it (use the [resources breakdown](#cloud-cost-breakdown) below)!
+
+Deployment is **low-touch**, but not no-touch. Most of the work is done by terraform, but you'll need prerequisites and a handful of manual steps, mainly:
+1. Fill values in `terraform.tfvars` files and `terraform apply` the roots **in order: GCP → Hetzner → AWS**.
+2. **GCP Vault bootstrap** (one-time, root token): `vault operator init`, store recovery keys offline, enable PKI / cert-auth / AppRoles — [gcp/BOOTSTRAP.md](gcp/BOOTSTRAP.md).
+3. **AWS (k8s) cross-cloud Vault role** after federation — [aws/k8s/README.md](aws/k8s/README.md).
+4. **DNS:** point your domain at the Hetzner IP, **DNS-only** (grey cloud in Cloudflare).
+
+See the [runbooks](#runbooks) section for complete details.
 
 ## What
-A lab that extends the main branch into a multi-cloud SPIFFE/SPIRE + Vault
-deployment. It adds no user-facing capability over main; its purpose is to exercise
-cross-cloud workload identity and secrets management. \
-Three nodes, each a separate Terraform root:
-1. **Hetzner** — the production node from main: VLESS+Reality proxy
-   ([Xray-core](https://github.com/XTLS/Xray-core)) + Psiphon Conduit relay
-   ([Psiphon Conduit](https://github.com/Psiphon-Inc/conduit)), unchanged.
-2. **AWS** — a k3s (Kubernetes) node running a SPIRE agent and a bandwidth-capped
-   Conduit pod, for Kubernetes-based workload attestation.
-3. **GCP** — the control plane: Vault (secrets management) and the SPIRE server
-   (workload attestation) that the other two nodes authenticate to.
-### VLESS
-End users connect with a client app - e.g. V2RayNG (Android), v2rayN (Windows), or Nekoray - that routes their device's traffic through the server. It works like a VPN for the user, though the underlying protocol is a proxy. This project generates connection URIs per user.
 
-### Conduit
-Conduit serves bandwidth to users through Psiphon's broker even when the server's IP is blocked; the direct VLESS paths require the IP to be reachable.
+Three nodes, each its **own Terraform root** (independent state, blast-radius isolation):
 
-_Older tags (v0.1.0–v0.3.0) provide alternative deployable configurations._
+| Node | Cloud          | Trust domain | Runs |
+|---|----------------|---|---|
+| **Control plane** | GCP e2-micro   | `viaduct.gcp` | Vault (secrets) + SPIRE server |
+| **Data plane** | Hetzner CX23   | `viaduct.gcp` (agent) | Xray VLESS + Conduit + SPIRE agent + Vault Agent |
+| **k8s node** | AWS t4g.small  | `viaduct.aws` | k3s + SPIRE server + agent + capped Conduit |
 
-### Deployment
-Deploys a Hetzner CX23 server (~€4/month) running:
-
-| Service | Purpose |
-|---|---|
-| **Conduit** | Psiphon inproxy relay — censorship circumvention for Psiphon clients |
-| **Xray** | VLESS proxy — Reality (direct, port 443) + XHTTP+TLS via Let's Encrypt (port 8443) |
-| **nginx** | Port 80: static website (active probing defence). Port 8443: terminates Let's Encrypt TLS, proxies XHTTP to Xray |
-| **xray-exporter** | Prometheus exporter for Xray inbound/system traffic stats |
-| **xray-user-stats** | Sidecar exporter for per-user traffic bytes (from Xray Stats API) |
-| **Grafana Alloy** | Metrics agent — scrapes all exporters, remote-writes to Grafana Cloud |
-
-All services run as unprivileged users under systemd. Ports 22, 80, 443, and 8443 are open inbound. Metrics are pushed outbound to Grafana Cloud — no inbound scrape port needed.
+**VLESS** (Xray-core): users connect with a client app (V2RayNG, v2rayN, Nekoray) that
+proxies their device's traffic. **Conduit** (Psiphon in-proxy): relays for Psiphon
+clients via Psiphon's brokers — works even when the node IP is blocked.
 
 ## Architecture
 
 ```
-┌──────────────────────────────── Clients ─────────────────────────────────┐
-│                                                                          │
-│  Direct (anywhere)                       Iran / blocked regions          │
-│  VLESS+XHTTP+TLS                         VLESS+Reality+TCP               │
-│  → example.com:8443                        → server-ip:443               │
-└────────────────────────────────────┬──────────────────┬──────────────────┘
-                                     │                  │
-                                     ▼                  ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  CX23 server (203.0.113.10)                                             │
-│                                                                         │
-│  nginx :80  (static site — active probing defence)                      │
-│                                                                         │
-│  nginx :8443 (Let's Encrypt TLS for example.com, HTTP/2)                │
-│    └── /api ──► xray XHTTP inbound :10000 (lo)                          │
-│                                                                         │
-│  xray Reality inbound :443 ◄────────────────────────────────────────    │
-│    (TLS impersonation of google.com — direct connections)               │
-│                                                                         │
-│  conduit        ── :9090/metrics ──┐                                    │
-│  xray-exporter  ── :9091/scrape  ──┤                                    │
-│  xray-user-stats── :9092/metrics ──┤                                    │
-│  alloy (node exporter built-in)    │                                    │
-│       └── remote-write (HTTPS) ────┴───────────────────────────────►    │
-│                                                                         │
-└──────────────────────────── Grafana Cloud ──────────────────────────────┘
-                              (hosted Prometheus + Grafana)
+                 ┌──────────── GCP — control plane (viaduct.gcp) ────────────┐
+                 │   Vault  (PKI root CA · KMS auto-unseal · Raft snapshots) │
+                 │   SPIRE server                                            │
+                 └───▲──────────────────▲────────────────────────▲───────────┘
+[3] SVID cert-auth → │ [1] SPIRE agent  │ SPIRE federation       │cross-cloud → GCP
+    Vault (:8200)    │     API (:8081)  │ (https_spiffe, :8443)  │Vault (:8200)
+                     │                  │                        │
+ ┌───────────────────┴──────┐      ┌────┴────────────────────────┴───────────┐
+ │ Hetzner CX23             │      │ AWS t4g.small                           │
+ │ (member of viaduct.gcp)  │      │  SPIRE server — root CA in AWS KMS      │
+ │  SPIRE agent (join_token)│      │  k3s + SPIFFE CSI driver                │
+ │ [2] Vault Agent → secrets│      │  SPIRE agent (aws_iid)                  │
+ │  Xray VLESS + Conduit    │◀════▶│  Conduit pod (capped) + Alloy           │
+ │  Alloy → Grafana Cloud   │ fed. │  egress guardrail (auto-stop ≈90 GB/mo) │
+ └──────────┬───────────────┘      └────────────────┬────────────────────────┘
+            │ VLESS + Conduit                       │ Conduit relay (capped)
+            ▼                                       ▼
+        end users  ◀──── Psiphon brokers / direct VLESS ────▶  end users
+                              │ (all nodes' Alloy)
+                              ▼
+                        Grafana Cloud (Prometheus + dashboards)
 ```
 
-Each user gets **two client URIs** (saved to `backups/clients/<name>.txt`):
-- **XHTTP URI** (`*-xhttp`) — connects to `example.com:8443` via Let's Encrypt TLS + HTTP/2. Use where the server IP is blocked but TLS to the domain on port 8443 is reachable.
-- **Reality URI** (`*-reality`) — connects directly to `server-ip:443`. Lower latency; use from anywhere the server IP is reachable.
+**Runtime identity → secrets flow:** **[1]** each SPIRE agent attests its node (Hetzner
+`join_token` → GCP server; AWS `aws_iid` → its own server) and receives an agent SVID;
+**[2]** the agent issues short-lived SVIDs to local workloads over the Workload API;
+**[3]** a workload presents its SVID to Vault (cert auth, matched on the SVID's SPIFFE
+URI SAN) and gets scoped secrets — the AWS workload reaches GCP Vault **cross-cloud**,
+trust for which is established by SPIRE **federation** (:8443). (Deploy order is the
+reverse dependency: GCP → Hetzner → AWS; see [Runbooks](#runbooks).)
 
-> **DNS note:** for this version, `example.com` must be DNS-only (grey cloud) in Cloudflare, never proxied. XHTTP connects directly to the server's own TLS, so Cloudflare must stay out of the path. \
-> For regions where Cloudflare is reachable and you want to use Cloudflare proxying, see tag v0.2.0 (VLESS over Cloudflare + WebSocket).
- 
-## Prerequisites
+## Identity & secrets
+
+- **Two independently-rooted trust domains.** `viaduct.gcp`'s SPIRE CA chains to Vault's
+  PKI root; `viaduct.aws`'s is self-signed with its key in **AWS KMS**. **Neither root
+  private key ever leaves its home** (Vault / KMS) — a node compromise yields transient
+  signing at most, never key theft.
+- **Federation.** The two SPIRE servers exchange trust bundles over `https_spiffe`
+  endpoints (:8443), so a workload in one domain can authenticate one in the other.
+- **Secrets.** Workloads get short-lived X.509 **SVIDs** from SPIRE, then authenticate
+  to Vault (cert auth, bound to the SVID's SPIFFE URI SAN) for scoped KV secrets. The
+  AWS node authenticates **cross-cloud** to GCP's Vault this way. Secrets are rendered
+  to **tmpfs / RAM**, never to persistent disk and never committed.
+
+## Cloud cost breakdown
+
+All-in estimate (USD/month, 24/7, excludes exceeding the AWS egress cap). The only
+thing that changes at the cliff is the AWS instance leaving its free trial; GCP's
+e2-micro is *always*-free (indefinite), and every other line is billed in both periods.
+
+| Line item | Before 2026-12-31 | After | Notes |
+|---|---|---|---|
+| Hetzner CX23 | ~4.3 | ~4.3 | €4; the always-on station, incl. 20 TB egress |
+| GCP e2-micro compute | 0 | 0 | always-free tier (us-central1), indefinite |
+| GCP external IPv4 | ~3.6 | ~3.6 | billed even on free-tier VMs |
+| GCP KMS + GCS snapshots | ~0.1 | ~0.1 | unseal key + small weekly Raft snapshots |
+| AWS t4g.small compute | 0 | ~13 | **free trial → 2026-12-31**, then on-demand 24/7 |
+| AWS EIP (public IPv4) | ~3.6 | ~3.6 | billed in-use |
+| AWS EBS gp3 root | ~1.8 | ~1.8 | ~20 GB, encrypted |
+| AWS KMS (SPIRE CA) | ~1.0 | ~1.0 | 1 customer key; **survives `terraform destroy`** |
+| **Total** | **≈ 14** | **≈ 27** | |
+
+Figures are approximate and region/FX-dependent; the AWS instance assumes on-demand 24/7
+(a 1-yr Savings Plan roughly halves it). AWS egress is the cost risk (100 GB/mo free, then
+~$0.09/GB) — the Conduit relay is **bandwidth-capped** and a host timer guardrail **auto-stops the
+instance near 90 GB/month**. **Lifecycle:** Hetzner is persistent (the live station); GCP + AWS
+are the lab and can be torn once they've served their educational purpose.
+
+## Runbooks
+
+### Prerequisites
 
 - [Terraform](https://developer.hashicorp.com/terraform/install) ≥ 1.3
-- A [Hetzner Cloud](https://www.hetzner.com/cloud/) account
+- Accounts on [Hetzner Cloud](https://www.hetzner.com/cloud/), [AWS](https://signin.aws.amazon.com/signup?request_type=register) and [GCP](https://docs.cloud.google.com/docs/get-started/)
 - A domain name with [Cloudflare](https://cloudflare.com) as the DNS provider (free tier sufficient — used only for DNS-01 certificate issuance, not CDN proxying)
 - A [Grafana Cloud](https://grafana.com/auth/sign-up) account (free tier)
 - An SSH key pair on your local machine
 
-## First-time setup
+### First-time setup
 
-### 1. Cloudflare
+#### 1. Cloudflare
 
 1. Register a domain (Namecheap, Porkbun, or Cloudflare Registrar — all include free WHOIS privacy)
 2. Add the domain to Cloudflare → note the two nameservers → set them in your registrar
 3. In Cloudflare DNS, add an **A record**: name `@`, value = your Hetzner server IP, **DNS-only** (grey cloud — do not proxy)
 4. Create a Cloudflare API token: **My Profile → API Tokens → Create Token**
-   - Permission: `Zone:DNS:Edit` scoped to your domain zone
-   - This token is used only by certbot for DNS-01 certificate issuance
+  - Permission: `Zone:DNS:Edit` scoped to your domain zone
+  - This token is used only by certbot for DNS-01 certificate issuance
 
-### 2. Grafana Cloud
+#### 2. Grafana Cloud
 
 1. Sign up at grafana.com → create a stack
 2. Navigate to your stack → **Prometheus** → **Details**
 3. Note the **Remote Write Endpoint** URL and **Username**
 4. Go to your org → **Access Policies** → create an access policy scoped to **`metrics:write`**, then generate a token under it
-5. Import the Grafana dashboards (see [Dashboards](#dashboards) below)
+5. Import the Grafana dashboards 
 
-### 3. Terraform
+#### 3. Terraform
 
-```sh
-cp terraform.tfvars.example terraform.tfvars
-# Fill in: hcloud_token, ssh keys, vless_domain, vless_users,
-# cloudflare_api_token, grafana_cloud_* values,
-# binary versions and checksums (run scripts/get-checksums.sh)
+Each root is independent (local state). **Order matters: bring up the GCP control plane
+first** — the other nodes authenticate to its Vault/SPIRE; then Hetzner and AWS.
 
-terraform init
-terraform plan
-terraform apply
-```
+1. **Shared SSH source.** Export your admin IP once (used by all three roots):
+   `export TF_VAR_admin_cidr='["x.x.x.x/32"]'`
+2. **GCP control plane.** `cd gcp && cp terraform.tfvars.example terraform.tfvars`,
+   fill it in, then `terraform init && terraform apply`.
+   Vault comes up **sealed + uninitialised**.
+3. **GCP Vault bootstrap** (one-time, manual) — follow [GCP boostrap](gcp/BOOTSTRAP.md):
+   `vault operator init` → store recovery keys + root token **offline**; enable
+   KV/PKI/cert-auth/AppRoles; put the two AppRole **role-ids** into `gcp/terraform.tfvars`
+   and `terraform apply` again; place the **secret-ids** on the host; seed secrets;
+   `vault token revoke -self`.
+4. **Hetzner data plane.** From the repo root:
+   `cp terraform.tfvars.example terraform.tfvars && ./scripts/get-checksums.sh`,
+   then `terraform init && terraform apply`.
+5. **AWS node.** `cd aws && cp terraform.tfvars.example terraform.tfvars`,
+   set `gcp_control_plane_ip` + `gcp_vault_fingerprint` (and `gcp_trust_domain`),
+   then `terraform init && terraform apply`.
+6. **AWS cross-cloud Vault role** (one-time, manual) — follow [K8s Readme](aws/k8s/README.md#vault-cert-auth-bootstrap): create the `aws-vault-agent` cert role on GCP Vault and
+   seed `kv/aws/grafana`.
+7. **Complete federation.** Set `aws_spire_ip` and `federation_cidrs` in
+   `gcp/terraform.tfvars`, then `cd gcp && terraform apply` to open `:8443` and emit the
+   federation block (AWS already federates toward GCP from step 5). Then bootstrap the
+   trust bundle on the GCP box (initial TOFU — the AWS side imports GCP's automatically via
+   `crosscloud-bootstrap`, but GCP's import of the AWS bundle is manual):
+   `curl -sk https://<aws-ip>:8443 | sudo spire-server bundle set -format spiffe -id spiffe://viaduct.aws`
+8. **Verify.** SVIDs issuing (`spire-server entry show`), Vault Agent rendering secrets,
+   metrics arriving in Grafana Cloud (all three `node` labels).
 
-After `apply`, the provisioner:
-1. Waits for cloud-init to finish
-2. Uploads any backup files (preserving Conduit identity, Reality keypair, UUIDs)
-3. Uploads `users.txt` and `alloy-config.alloy` (with Grafana credentials)
-4. Runs `xray-setup.sh --regen`
-5. Starts all six services
-6. Downloads fresh backups to `backups/`
+### Recovery 
+See [Recovery runbook](gcp/RESTORE.md)
 
-## Dashboards
+### Teardown
 
-| Dashboard | Source |
-|---|---|
-| **VLESS+Reality** | `dashboards/vless-xray-dashboard.json` (this repo) |
-| **Conduit** | https://github.com/shayanb/MoaV/blob/main/configs/monitoring/grafana/provisioning/dashboards/conduit.json |
-| **Node (system)** | Grafana dashboard ID **1860** (Node Exporter Full) — import by ID |
-
-To import the VLESS dashboard: Grafana → Dashboards → New → Import → upload the JSON file, then select your Grafana Cloud Prometheus datasource.
-
-The dashboard shows:
-- Service status and uptime
-- Bandwidth by inbound (`vless_xhttp_in` = XHTTP/TLS, `vless_in` = Reality/direct)
-- Per-user uplink/downlink rates and totals (from `xray-user-stats`)
-- Active users in the selected time range (from `xray-user-stats`)
-
-## Adding or revoking users
-
-Edit `vless_users` in `terraform.tfvars`, then:
+Tear the data plane nodes down first, control plane last:
 
 ```sh
-terraform apply
+cd aws && terraform destroy      # then delete the SPIRE CA in AWS KMS (see note)
+terraform destroy                # Hetzner (repo root)
+cd gcp && terraform destroy      # stops short of the prevent_destroy unseal key + bucket (see note)
 ```
 
-The provisioner detects the change (via `users_hash` trigger), uploads the new `users.txt`, calls `xray-setup.sh --regen`, and restarts Xray. No server rebuild. Existing users keep their UUIDs.
+> - **AWS KMS (SPIRE CA):** not Terraform-managed — after `aws destroy`, run
+>   `aws kms schedule-key-deletion` for it or it lingers (~$1/mo).
+> - **GCP KMS unseal key + snapshot bucket:** marked `prevent_destroy`, so `terraform destroy`
+>   leaves them by design (the GCP destroy won't complete until they're gone). To remove them —
+>   which makes any Vault snapshot **permanently unrecoverable** — drop the `lifecycle` blocks
+>   or delete them manually via `gcloud`.
+>
+> Tear the GCP + AWS roots down **before 2026-12-31** to fall back to ~$4.3/mo (Hetzner only).
 
-## What happens on terraform apply
+## Data plane (the service)
 
-### First apply (new server)
-cloud-init installs binaries, nginx, certbot, and registers systemd units. Let's Encrypt issues a certificate via DNS-01 challenge. The provisioner then uploads backups, generates credentials, starts services, and downloads backups.
+Hetzner runs the full VLESS station; AWS runs an egress-capped Conduit relay. Each VLESS user gets **two client URIs** in
+`backups/clients/<name>.txt`:
 
-### Subsequent applies (users changed)
-Server is not rebuilt. Provisioner re-runs due to `users_hash` trigger.
+- **Reality** (`*-reality`) — direct to `server-ip:443`, TLS-impersonates `google.com`. Lower latency where the IP is reachable.
+- **XHTTP/TLS** (`*-xhttp`) — to `example.com:8443` via Let's Encrypt + HTTP/2. For regions where the IP is blocked but the domain on :8443 is reachable.
 
-### Destroy + re-apply (full rebuild)
-cloud-init runs fresh. The provisioner uploads:
-- `backups/conduit_key.json` — preserves Conduit broker reputation
-- `backups/keypair.env` — preserves Reality keypair (users keep their client configs)
-- `backups/clients/*.uuid` — preserves UUIDs
+Add/revoke users by editing `vless_users` in `terraform.tfvars` and re-running
+`terraform apply` (no rebuild — existing users keep their UUIDs). Optional Iran traffic
+prioritisation via [KhajuBridge](https://github.com/delejos/conduit-iran-khajubridge)
+(nftables; not Terraform-managed — reapply after a rebuild).
 
-> **Important:** `backups/keypair.env` must have all three fields populated (`PRIVATE_KEY`, `PUBLIC_KEY`, `SHORT_ID`) before a rebuild. If any are blank, xray-setup.sh will abort with an error. Verify with `cat backups/keypair.env` before running `terraform apply`.
+## Observability
 
-## Metrics architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│  CX23 server                                        │
-│                                                     │
-│  conduit        ──── :9090/metrics ──┐              │
-│  xray-exporter  ──── :9091/scrape  ──┤              │
-│  xray-user-stats──── :9092/metrics ──┤              │
-│  alloy (node exporter built-in)      │              │
-│       └── remote-write (HTTPS out) ──┴───────────►  │
-│                                                     │
-└──────────────────────── Grafana Cloud ──────────────┘
-                          (hosted Prometheus + Grafana)
-```
-
-**xray-exporter** (compassvpn fork) reads Xray's gRPC Stats API:
-- `xray_up`, `xray_uptime_seconds` — service health
-- `xray_traffic_uplink/downlink_bytes_total{dimension="inbound"}` — per-inbound bandwidth
-
-> The exporter can also derive access-log metrics (`xray_unique_users`, `xray_countries_total`, `xray_cities_total`, `xray_asns_total`). They are **unavailable in this configuration**: the Xray access log is set to `none` so the server does not record client destinations (see [Security notes](#security-notes)). The two metrics above come from the Stats API and are unaffected.
-
-**xray-user-stats** (custom sidecar) queries the Xray Stats API directly:
-- `xray_user_uplink_bytes_total{user="..."}` — cumulative uplink per user
-- `xray_user_downlink_bytes_total{user="..."}` — cumulative downlink per user
-
-These are true Prometheus counters, so Grafana `rate()` and `increase()` queries work correctly across any time range.
-
-## File layout
-
-### Local (backups/ — secure these)
-
-```
-backups/
-  conduit_key.json      # Conduit broker identity — loss means reputation reset
-  keypair.env           # Reality private key + public key + short ID
-  users.txt             # Generated from vless_users; uploaded each apply
-  alloy-config.alloy    # Rendered Alloy config with Grafana credentials
-  clients/
-    alice.uuid           # Per-user UUID — preserved across rebuilds
-    alice.txt            # Per-user URIs (Reality + XHTTP)
-```
-
-### Server
-
-| Path | Purpose |
-|---|---|
-| `/usr/local/bin/conduit` | Conduit binary |
-| `/var/lib/conduit/data/conduit_key.json` | Conduit identity |
-| `/usr/local/bin/xray` | Xray-core binary |
-| `/usr/local/bin/geoip.dat` | IP geolocation data (v2fly) — used for `geoip:ir` routing rules |
-| `/usr/local/bin/geosite.dat` | Domain category data (v2fly) — used for `geosite:category-ir` routing rules |
-| `/etc/xray/config.json` | Xray config (root:xray 640) |
-| `/etc/xray/keypair.env` | Reality keypair (root 600) |
-| `/etc/xray/users.txt` | Current user list |
-| `/etc/xray/clients/<name>.uuid` | Per-user UUID |
-| `/etc/xray/clients/<name>.txt` | Per-user URIs (Reality + XHTTP) |
-| `/usr/local/sbin/xray-setup.sh` | Generates xray config + per-user UUIDs and URIs from `/etc/xray/users.txt`. Run with `--regen` to regenerate after editing users. Restart xray after. |
-| `/usr/local/bin/xray-exporter` | Xray inbound stats → Prometheus |
-| `/usr/local/bin/xray-user-stats.py` | Xray per-user stats → Prometheus (port 9092) |
-| `/etc/nginx/conf.d/site.conf` | nginx config: port 80 static site + port 8443 XHTTP proxy |
-| `/etc/letsencrypt/live/<vless_domain>/fullchain.pem` | Let's Encrypt TLS certificate (auto-renews via systemd timer) |
-| `/etc/letsencrypt/live/<vless_domain>/privkey.pem` | Let's Encrypt private key |
-| `/usr/local/bin/alloy` | Grafana Alloy binary |
-| `/etc/alloy/config.alloy` | Alloy scrape + remote-write config |
-
-## Useful commands
-
-```sh
-# Service status
-ssh root@<ip> 'systemctl status conduit xray xray-exporter xray-user-stats alloy nginx'
-
-# Logs
-ssh root@<ip> 'journalctl -u conduit -f'
-ssh root@<ip> 'journalctl -u xray -f'
-ssh root@<ip> 'journalctl -u alloy -f'
-
-# Check metrics endpoints (from the server)
-ssh root@<ip> 'curl -s http://127.0.0.1:9090/metrics | head -20'   # Conduit
-ssh root@<ip> 'curl -s http://127.0.0.1:9091/scrape  | head -20'   # xray-exporter
-ssh root@<ip> 'curl -s http://127.0.0.1:9092/metrics'              # xray-user-stats
-
-# Query xray Stats API directly
-ssh root@<ip> '/usr/local/bin/xray api statsquery --server=127.0.0.1:8080 --pattern=user'
-
-# Check Let's Encrypt certificate expiry
-ssh root@<ip> 'certbot certificates'
-
-# Manually re-run provisioner without a full apply
-terraform apply -replace=null_resource.provision
-```
-
-## Updating binaries
-
-Change the relevant `*_version` variable in `terraform.tfvars`. Then run `get-checksums.sh` and paste the new checksums into `terraform.tfvars`.
-Then SSH in and update manually (cloud-init only runs on first boot), or destroy and recreate. On recreate, backups restore everything automatically.
-
-## Optional: KhajuBridge (Iran traffic prioritisation)
-
-[KhajuBridge](https://github.com/delejos/conduit-iran-khajubridge) is an optional nftables layer that restricts Conduit's UDP traffic to Iranian IP ranges, biasing the Psiphon broker toward routing Iranian clients to your instance. It does not affect Xray/VLESS or SSH.
-
-```sh
-cd /opt
-git clone https://github.com/delejos/conduit-iran-khajubridge khajubridge
-cd khajubridge
-chmod +x scripts/*.sh install.sh
-sudo bash install.sh
-sudo /opt/khajubridge/scripts/update_region_cidrs.sh
-sudo sed -i '/^define IRAN_UDP_RATE/d' /opt/khajubridge/nftables/conduit-region.nft
-sudo sed -i \
-  's/limit rate \$IRAN_UDP_RATE burst \$IRAN_UDP_BURST packets/limit rate 100000\/second burst 200000 packets/g' \
-  /opt/khajubridge/nftables/conduit-region.nft
-sudo /opt/khajubridge/scripts/apply_firewall.sh
-sudo cp /opt/khajubridge/systemd/khajubridge-cidr-refresh.service /etc/systemd/system/
-sudo cp /opt/khajubridge/systemd/khajubridge-cidr-refresh.timer   /etc/systemd/system/
-sudo cp -r /opt/khajubridge/systemd/conduit.service.d             /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now khajubridge-cidr-refresh.timer
-```
-
-The two `sed` commands work around a syntax error in the nftables template (rate expressions are not valid in `define` statements on Ubuntu 24.04's nftables).
-
-To remove: `sudo nft delete table inet khajubridge && sudo systemctl disable --now khajubridge-cidr-refresh.timer`
-
-Note: KhajuBridge is not managed by Terraform and must be reapplied manually after a server rebuild.
+Every node's **Grafana Alloy** scrapes local exporters and remote-writes to Grafana
+Cloud, labelled by node. Conduit usage → the [MoaV dashboard](https://github.com/shayanb/MoaV/blob/main/configs/monitoring/grafana/provisioning/dashboards/conduit.json); VLESS per-user stats →
+`dashboards/vless-xray-dashboard.json`; node metrics → Node Exporter (ID 1860). The AWS
+egress headroom is sent as `aws_mtd_egress_bytes` / `aws_egress_cap_bytes`. Vault /
+SPIRE / k8s telemetry will be monitored on a **separate** dashboard (planned).
 
 ## Security notes
 
-- `backups/` is gitignored. Store it in a password manager vault or encrypted drive.
-- The Alloy config contains your Grafana Cloud access-policy token — treat it like a password.
-- The Reality keypair is equivalent to a TLS private key — back it up and keep it private.
-- The Cloudflare API token only needs `Zone:DNS:Edit` permission. It is used solely by certbot for DNS-01 certificate renewal and is never exposed to client traffic.
-- Port 80 serves a static website intentionally — this defeats active probing (DPI systems that send HTTP GET requests to suspected proxy IPs will receive a legitimate-looking response).
-- Iranian IP ranges and domains are routed to a `block` outbound in Xray (`geoip:ir`, `geosite:category-ir`), preventing the server from proxying traffic back to Iranian infrastructure. This removes a potential fingerprinting signal.
-- The Xray access log is disabled (`"access": "none"`), so the server does not record which destinations users connect to. Per-user byte totals are unaffected — they come from the Stats API, not the access log.
-
-## Teardown
-
-```sh
-terraform destroy
-```
+- Root CA keys never leave home: Vault PKI (`viaduct.gcp`) and AWS KMS (`viaduct.aws`).
+- Secrets reach workloads at runtime via Vault Agent → **tmpfs**, not persistent disk; per-node disjoint secret sets cap lateral reach.
+- `backups/` and all `terraform.tfvars` are gitignored — they hold live keys/tokens.
+- Xray access log is `none` (no record of user destinations); `geoip:ir` / `geosite:category-ir` are routed to `block` (no proxying back into Iran — removes a fingerprint signal). Port 80 serves a decoy static site (anti-active-probing).
 
 ## License
 
@@ -311,19 +222,18 @@ Released under the [MIT License](LICENSE).
 
 ## Acknowledgements
 
-Built on these open-source projects:
-
-- [Xray-core](https://github.com/XTLS/Xray-core) — VLESS / Reality / XHTTP proxy core
-- [Psiphon Conduit](https://github.com/Psiphon-Inc/conduit) — in-proxy relay for Psiphon clients
-- [Grafana Alloy](https://github.com/grafana/alloy) — metrics collection agent
-- [v2fly/geoip](https://github.com/v2fly/geoip) and [v2fly/domain-list-community](https://github.com/v2fly/domain-list-community) — geo-routing data
+- [SPIFFE/SPIRE](https://spiffe.io) — workload identity & attestation
+- [HashiCorp Vault](https://www.vaultproject.io) — secrets & PKI
+- [k3s](https://k3s.io) — lightweight Kubernetes · [SPIFFE CSI Driver](https://github.com/spiffe/spiffe-csi)
+- [Xray-core](https://github.com/XTLS/Xray-core) — VLESS / Reality / XHTTP proxy
+- [Psiphon Conduit](https://github.com/Psiphon-Inc/conduit) — in-proxy relay
+- [Grafana Alloy](https://github.com/grafana/alloy) — metrics agent · [v2fly](https://github.com/v2fly) geo-routing data
 
 Configuration, scripts and documentation co-authored with [Claude](https://claude.ai) (Anthropic).
 
 ## Disclaimer
 
-This repository contains personal infrastructure-as-code for deploying a
-censorship-circumvention node. It is published for educational and transparency
-purposes. It is not an operated service — this repository provides no
-infrastructure, access, or credentials. Anyone who deploys their own instance is
-solely responsible for complying with all applicable laws and regulations.
+Personal infrastructure-as-code, published for
+educational and transparency purposes. This is not an operated service — the repository
+provides no infrastructure, access, or credentials. Anyone who deploys their own instance
+is solely responsible for complying with all applicable laws and regulations.

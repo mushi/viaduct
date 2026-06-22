@@ -25,11 +25,6 @@ grafana_cloud_api_key = "glc_eyJ..."
 # Permissions needed: Zone:DNS:Edit for your vless_domain zone.
 cloudflare_api_token = "your-cloudflare-api-token-here"
 
-# ── Recommended ───────────────────────────────────────────────────────────────
-
-# Restrict SSH to your own IP. Find it at https://ifconfig.me
-# admin_cidr = ["203.0.113.1/32"]
-
 # ── Optional overrides ────────────────────────────────────────────────────────
 
 # location            = "nbg1"              # nbg1 fsn1 hel1 ash sin
@@ -56,10 +51,13 @@ alloy_zip_sha256 = ""   # obtain via scripts/get-checksums.sh
 # ── SPIRE agent (multi-cloud lab — optional) ──────────────────────────────────
 # This node attests (join_token) to the SPIRE server in the gcp/ root. Deploy
 # gcp/ FIRST, then set gcp_spire_server_ip below. Leave it empty to skip SPIRE.
-# spire_agent_sha256: sha256 of spire-<version>-linux-amd64-musl.tar.gz.
 # spire_agent_version  = "1.15.1"
 # spire_agent_sha256   = "e1b58f9f52f601dc35c3b56bad4c810dfb7faf50c8531bcecdb4f64ae3cc007a"
 # gcp_spire_server_ip  = ""                    # public IP of the GCP SPIRE server (from `terraform output` in gcp/)
 # gcp_ssh_key_path     = "~/.ssh/viaduct_lab"
 # gcp_ssh_user         = "viaduct"
 # trust_domain         = "viaduct.gcp"
+
+# Restrict SSH to your own IP /32. Find it at https://ifconfig.me
+# either uncomment below or export TF_VAR_admin_cidr='["203.0.113.10/32"]' for use in all terraform roots
+# admin_cidr = ["203.0.113.10/32"]

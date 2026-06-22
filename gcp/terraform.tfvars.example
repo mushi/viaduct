@@ -6,9 +6,6 @@ zone       = "us-central1-a"
 ssh_user       = "viaduct"
 ssh_public_key = "ssh-ed25519 AAAA... your-key-here"
 
-# Restrict SSH to your own IP /32. Find it at https://ifconfig.me
-admin_cidr = ["203.0.113.10/32"]
-
 # AWS + Hetzner node IPs, added once those nodes exist. Empty disables the
 # Vault/SPIRE ingress rule.
 agent_cidrs = []
@@ -27,3 +24,11 @@ trust_domain          = "viaduct.gcp"
 
 # Vault snapshot job AppRole role_id (non-secret).
 snapshot_approle_role_id = "<vault approle role_id>"
+
+# AWS SPIRE server IP for federation (federates_with viaduct.aws); empty = standalone
+aws_spire_ip = "203.0.113.20"
+
+# ── Optional ────────────────────────────────────────────────────────
+# Restrict SSH to your own IP /32. Find it at https://ifconfig.me
+# either uncomment below or export TF_VAR_admin_cidr='["203.0.113.10/32"]' for use in all terraform roots
+# admin_cidr = ["203.0.113.10/32"]
