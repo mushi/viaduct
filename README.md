@@ -14,14 +14,14 @@ _Older tags (v0.1.0–v0.3.0) provide alternative deployable configurations._
 ### Deployment
 Deploys a Hetzner CX23 server (~€4/month) running:
 
-| Service | Purpose |
-|---|---|
-| **Conduit** | Psiphon inproxy relay — censorship circumvention for Psiphon clients |
-| **Xray** | VLESS proxy — Reality (direct, port 443) + XHTTP+TLS via Let's Encrypt (port 8443) |
+| Service | Purpose                                                                                                          |
+|---|------------------------------------------------------------------------------------------------------------------|
+| **Conduit** | Psiphon inproxy relay — bandwidth donation for Psiphon clients                                                   |
+| **Xray** | VLESS proxy — Reality (direct, port 443) + XHTTP+TLS via Let's Encrypt (port 8443)                               |
 | **nginx** | Port 80: static website (active probing defence). Port 8443: terminates Let's Encrypt TLS, proxies XHTTP to Xray |
-| **xray-exporter** | Prometheus exporter for Xray inbound/system traffic stats |
-| **xray-user-stats** | Sidecar exporter for per-user traffic bytes (from Xray Stats API) |
-| **Grafana Alloy** | Metrics agent — scrapes all exporters, remote-writes to Grafana Cloud |
+| **xray-exporter** | Prometheus exporter for Xray inbound/system traffic stats                                                        |
+| **xray-user-stats** | Sidecar exporter for per-user traffic bytes (from Xray Stats API)                                                |
+| **Grafana Alloy** | Metrics agent — scrapes all exporters, remote-writes to Grafana Cloud                                            |
 
 All services run as unprivileged users under systemd. Ports 22, 80, 443, and 8443 are open inbound. Metrics are pushed outbound to Grafana Cloud — no inbound scrape port needed.
 
