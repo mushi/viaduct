@@ -232,8 +232,8 @@ Released under the [MIT License](LICENSE).
 Configuration, scripts and documentation co-authored with [Claude](https://claude.ai) (Anthropic).
 
 ## Disclaimer
-
-Personal infrastructure-as-code, published for
+This repository contains personal infrastructure-as-code for deploy
+nodes that could be used to circumvent censorship. Personal infrastructure-as-code, published for
 educational and transparency purposes. This is not an operated service — the repository
 provides no infrastructure, access, or credentials. Anyone who deploys their own instance
 is solely responsible for complying with all applicable laws and regulations.
