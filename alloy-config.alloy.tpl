@@ -1,4 +1,3 @@
-// alloy-config.alloy.tpl
 // Rendered by Terraform from grafana_cloud_* variables and written to
 // backups/alloy-config.alloy, then uploaded to /etc/alloy/config.alloy
 // by the provisioner. Credentials never touch user_data / cloud-init.
@@ -54,6 +53,9 @@ prometheus.scrape "node" {
 // ── Remote write: Grafana Cloud ───────────────────────────────────────────
 
 prometheus.remote_write "grafana_cloud" {
+  // tag every series from this node so multi-node dashboards can break down by node
+  external_labels = { node = "hetzner" }
+
   endpoint {
     url = "${grafana_cloud_url}"
 
