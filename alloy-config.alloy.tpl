@@ -54,7 +54,10 @@ prometheus.scrape "node" {
 // ── Remote write: Grafana Cloud ───────────────────────────────────────────
 
 prometheus.remote_write "grafana_cloud" {
-  endpoint {
+    // tag every series from this node so multi-node dashboards can break down by node
+    external_labels = { node = "hetzner" }
+
+    endpoint {
     url = "${grafana_cloud_url}"
 
     basic_auth {
