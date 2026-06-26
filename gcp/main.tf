@@ -155,6 +155,36 @@ resource "google_storage_bucket_iam_member" "vault_snapshots" {
   member = "serviceAccount:${google_service_account.controlplane.email}"
 }
 
+# Google APIs required at runtime / by Terraform. Declared explicitly so a from-scratch
+# deploy doesn't fail mid-flight: compute + iam are called by Vault's `gcp` auth (instance
+# + service-account lookup); cloudresourcemanager backs the project-IAM bindings below.
+resource "google_project_service" "required" {
+  for_each = toset([
+    "compute.googleapis.com",
+    "iam.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
+  ])
+  project            = var.project_id
+  service            = each.value
+  disable_on_destroy = false # shared APIs — don't disable them on teardown
+}
+
+# Lets Vault's `gcp` auth method verify operator logins by GCE instance identity
+# (type=gce): the backend reads the calling instance (compute.instances.get) and resolves
+# its service account (iam.serviceAccounts.get) to match the role's bound_service_accounts.
+# Used for the operator `admin` role so the root token can be revoked.
+resource "google_project_iam_member" "vault_gcp_auth_compute_viewer" {
+  project = var.project_id
+  role    = "roles/compute.viewer" # compute.instances.get
+  member  = "serviceAccount:${google_service_account.controlplane.email}"
+}
+
+resource "google_project_iam_member" "vault_gcp_auth_sa_viewer" {
+  project = var.project_id
+  role    = "roles/iam.serviceAccountViewer" # iam.serviceAccounts.get
+  member  = "serviceAccount:${google_service_account.controlplane.email}"
+}
+
 # ─── Instance (DISPOSABLE) ───────────────────────────────────────────────────
 resource "google_compute_instance" "controlplane" {
   name         = var.instance_name

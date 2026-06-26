@@ -144,14 +144,54 @@ sudo /usr/local/bin/spire-server healthcheck
 sudo systemctl start vault-snapshot.service   # verify the first snapshot lands in GCS
 ```
 
-## 7. Revoke the root token
+## 7. Operator admin via GCP auth, then revoke the root token
+
+Replace the standing root token with a short-lived **admin** token the operator gets from
+the box's own GCE instance identity — nothing to store. (Vault's `gcp` auth works fine for
+this even though SPIRE's UpstreamAuthority can't use it — that limit is SPIRE-plugin-specific,
+see §4.)
+
+Prereq (all in `gcp/main.tf`, applied by your admin/Terraform identity — not the box SA):
+the `compute`, `iam`, and `cloudresourcemanager` APIs enabled (`google_project_service.required`),
+and the instance SA granted **`roles/compute.viewer`** (`compute.instances.get`) +
+**`roles/iam.serviceAccountViewer`** (`iam.serviceAccounts.get`) so Vault's `gcp` backend can
+read the calling instance and resolve its service account.
 
 ```sh
-vault token revoke -self
+# near-root admin policy (true root is regenerable from recovery keys if ever needed)
+vault policy write admin - <<'EOF'
+path "sys/*"  { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
+path "auth/*" { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
+path "kv/*"   { capabilities = ["create", "read", "update", "delete", "list"] }
+path "pki/*"  { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
+EOF
+
+# operator logs in by the box's GCE instance identity (no key/secret on disk)
+vault auth enable gcp 2>/dev/null || true
+vault write auth/gcp/role/admin type=gce \
+  project_id=<project-id> \
+  bound_zones=<zone> \
+  bound_service_accounts=<controlplane-sa-email> \
+  policies=admin token_ttl=20m token_max_ttl=2h
 ```
 
-Root tokens have no TTL — don't keep it. Recover via `operator generate-root`
-with the offline recovery keys when you next need root.
+Test from a **fresh shell** (don't lean on the cached root token), and confirm the admin
+token can do real work **before** revoking root:
 
-> **Backlog:** issue a scoped admin token (sudo over `sys/*`, mounts, auth, policies,
-> pki, kv) for routine operator work so you rarely touch root at all.
+```sh
+vault login -method=gcp role=admin type=gce
+vault policy list && vault secrets list && vault auth list
+```
+
+Then revoke the standing root token (the one from §1):
+
+```sh
+vault token revoke <init-root-token>
+```
+
+Root tokens have no TTL — don't keep one standing. Break-glass: `vault operator generate-root`
+with the offline recovery keys.
+
+> Binding `admin` to the instance SA means anyone with **root on the box** can obtain Vault
+> admin — not a new escalation (box-root already controls Vault's memory/unseal). For a
+> separate operator principal, bind to your gcloud user via the `iam` type instead.

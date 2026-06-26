@@ -56,12 +56,10 @@ mkdir -p /opt/vault/data
 cat > /etc/vault.d/vault.hcl <<EOF
 ui = false
 
-# Vault 1.20+ requires this to be set explicitly. mlock is DISABLED: on this
+# mlock is DISABLED: on this
 # 1 GB host mlock inflated Vault's RSS to ~530 MB (Go heap arenas locked
 # resident); disabling it drops RSS to ~190 MB, which fits the box. Safe because
-# this host has NO swap (see startup.sh) — there is no disk for memory to swap
-# to, so secrets cannot reach the disk. This is Vault's other endorsed
-# configuration for disabling mlock ("where swap is disabled").
+# this host has NO swap (see startup.sh).
 disable_mlock = true
 
 storage "raft" {
