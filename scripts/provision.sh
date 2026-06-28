@@ -36,8 +36,8 @@ trap 'ssh -o ControlPath="${CONTROL_SOCKET}" -O exit root@${SERVER_IP} 2>/dev/nu
 
 BASE_OPTS=(
   -i "${SSH_KEY_PATH}"
-  -o StrictHostKeyChecking=no
-  -o UserKnownHostsFile=/dev/null
+  -o StrictHostKeyChecking=accept-new
+  -o UserKnownHostsFile="${BACKUPS_DIR}/known_hosts"
   -o BatchMode=yes
   -o ConnectTimeout=30
   -o ControlMaster=auto

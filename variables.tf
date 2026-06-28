@@ -93,6 +93,11 @@ variable "xray_exporter_version" {
   default     = "v0.2.0"
 }
 
+variable "xray_exporter_sha256" {
+  description = "SHA-256 of xray-exporter-linux-amd64 for the pinned xray_exporter_version. This release publishes no checksums file, so it is pinned here. Run scripts/get-checksums.sh to obtain."
+  type        = string
+}
+
 # ── Grafana / Alloy ───────────────────────────────────────────────────────────
 
 variable "alloy_version" {

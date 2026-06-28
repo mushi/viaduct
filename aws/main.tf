@@ -130,7 +130,13 @@ resource "aws_iam_role" "spire" {
 
 # aws_kms KeyManager: SPIRE manages its own keys (created on first run, keyed by
 # alias). Resource "*" because the key IDs are created dynamically by SPIRE; the
-# actions are the documented aws_kms plugin set.
+# actions are the documented aws_kms plugin set, MINUS kms:ScheduleKeyDeletion /
+# kms:CancelKeyDeletion — a runtime box has no reason to destroy KMS keys, and
+# withholding it stops a compromised instance from deleting the CA signing key.
+# Trade-off: on rotation SPIRE can't dispose superseded keys, so they linger
+# (~$1/mo each) until cleaned up at teardown.
+# Stronger follow-up (test via -replace first): scope the remaining per-key
+# actions by the tag SPIRE applies to its keys, instead of Resource "*".
 resource "aws_iam_role_policy" "kms" {
   name = "spire-aws-kms"
   role = aws_iam_role.spire.id
@@ -149,8 +155,6 @@ resource "aws_iam_role_policy" "kms" {
         "kms:UpdateAlias",
         "kms:DeleteAlias",
         "kms:Sign",
-        "kms:ScheduleKeyDeletion",
-        "kms:CancelKeyDeletion",
         "kms:TagResource"
       ]
       Resource = "*"
