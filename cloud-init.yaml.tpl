@@ -304,24 +304,17 @@ write_files:
       echo "Downloading $${ASSET_NAME}..."
       curl -fsSL "$${ASSET_URL}" -o "/tmp/$${ASSET_NAME}"
 
-      # Try to find and verify a checksums file for this release
-      CHECKSUMS_URL=$(echo "$${RELEASE_JSON}" | jq -r '
-        .assets[]
-        | select(.name | test("(?i)(checksum|sha256|hash)"))
-        | .browser_download_url' | head -1)
-
-      if [[ -n "$${CHECKSUMS_URL}" ]]; then
-        echo "Verifying against published checksums..."
-        curl -fsSL "$${CHECKSUMS_URL}" -o /tmp/xray-exporter-checksums.txt
-        if grep -F "$${ASSET_NAME}" /tmp/xray-exporter-checksums.txt | sha256sum --check --strict -; then
-          echo "xray-exporter checksum verified."
-        else
-          echo "FATAL: xray-exporter checksum mismatch — aborting" >&2
-          exit 1
-        fi
-      else
-        echo "WARNING: no checksums file found for xray-exporter $${EXPORTER_TAG} — skipping verification"
+      # Verify against the pinned SHA-256. This release publishes no checksums
+      # file, so xray-exporter is pinned in terraform.tfvars (scripts/get-checksums.sh),
+      # exactly like conduit/xray/alloy.
+      EXPECTED_SHA="${xray_exporter_sha256}"
+      if [[ -z "$${EXPECTED_SHA}" ]]; then
+        echo "FATAL: xray_exporter_sha256 is unset — refusing to install unverified binary" >&2
+        exit 1
       fi
+      echo "$${EXPECTED_SHA}  /tmp/$${ASSET_NAME}" | sha256sum --check --strict - \
+        || { echo "FATAL: xray-exporter checksum mismatch — aborting" >&2; exit 1; }
+      echo "xray-exporter checksum verified against pinned value."
 
       # Extract or install the binary
       if [[ "$${ASSET_NAME}" == *.tar.gz ]] || [[ "$${ASSET_NAME}" == *.tgz ]]; then
@@ -338,7 +331,7 @@ write_files:
       fi
 
       chmod +x /usr/local/bin/xray-exporter
-      rm -f "/tmp/$${ASSET_NAME}" /tmp/xray-exporter-checksums.txt
+      rm -f "/tmp/$${ASSET_NAME}"
       echo "xray-exporter installed: $(/usr/local/bin/xray-exporter --version 2>/dev/null || echo 'ok')"
 
   # ── xray-setup.sh ─────────────────────────────────────────────────────────
@@ -614,11 +607,18 @@ runcmd:
   # server does not proxy back to Iranian infrastructure — prevents proxy
   # fingerprinting by traffic analysis). Xray looks for these files alongside
   # the binary at /usr/local/bin/.
+  # Verified against each project's published .sha256sum (defeats transport MITM
+  # on the .dat; consistent with the checksum-pinning used for every other download).
   - |
-    curl -fsSL "https://github.com/v2fly/geoip/releases/latest/download/geoip.dat" \
-      -o /usr/local/bin/geoip.dat
-    curl -fsSL "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat" \
-      -o /usr/local/bin/geosite.dat
+    curl -fsSL "https://github.com/v2fly/geoip/releases/latest/download/geoip.dat" -o /tmp/geoip.dat
+    curl -fsSL "https://github.com/v2fly/geoip/releases/latest/download/geoip.dat.sha256sum" -o /tmp/geoip.dat.sha256sum
+    ( cd /tmp && sha256sum -c geoip.dat.sha256sum ) || { echo "FATAL: geoip.dat checksum mismatch — aborting"; exit 1; }
+    mv /tmp/geoip.dat /usr/local/bin/geoip.dat
+    curl -fsSL "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat" -o /tmp/dlc.dat
+    curl -fsSL "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat.sha256sum" -o /tmp/dlc.dat.sha256sum
+    ( cd /tmp && sha256sum -c dlc.dat.sha256sum ) || { echo "FATAL: geosite.dat checksum mismatch — aborting"; exit 1; }
+    mv /tmp/dlc.dat /usr/local/bin/geosite.dat
+    rm -f /tmp/geoip.dat.sha256sum /tmp/dlc.dat.sha256sum
 
   # ── xray-exporter binary ──────────────────────────────────────────────────
   # Delegates to a write_files bash script (install-xray-exporter.sh) so that

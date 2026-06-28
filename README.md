@@ -248,7 +248,7 @@ terraform apply -replace=null_resource.provision
 
 ## Updating binaries
 
-Change the relevant `*_version` variable in `terraform.tfvars`. Then run `get-checksums.sh` and paste the new checksums into `terraform.tfvars`.
+Change the relevant `*_version` variable in `terraform.tfvars`. Then run `scripts/get-checksums.sh` and paste the new checksums into `terraform.tfvars`.
 Then SSH in and update manually (cloud-init only runs on first boot), or destroy and recreate. On recreate, backups restore everything automatically.
 
 ## Optional: KhajuBridge (Iran traffic prioritisation)

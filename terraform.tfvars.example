@@ -46,9 +46,9 @@ cloudflare_api_token = "your-cloudflare-api-token-here"
 # ── Binary checksums (required) ───────────────────────────────────────────────
 # Run: ./scripts/get-checksums.sh
 # Paste the output here. Must be updated whenever any *_version changes above.
-# The script cross-checks against each project's upstream digest file where
-# available (Xray .dgst, Grafana SHA256SUMS) before printing values.
-conduit_sha256   = ""   # obtain via scripts/get-checksums.sh
-xray_zip_sha256  = ""   # obtain via scripts/get-checksums.sh
-alloy_zip_sha256 = ""   # obtain via scripts/get-checksums.sh
-# xray-exporter is verified at runtime against the release's checksums file
+# Digests come from the GitHub Releases API (or each project's published checksum
+# file where the API has none, e.g. Grafana SHA256SUMS). Recorded here, they are the pin.
+conduit_sha256       = ""   # obtain via scripts/get-checksums.sh
+xray_zip_sha256      = ""   # obtain via scripts/get-checksums.sh
+alloy_zip_sha256     = ""   # obtain via scripts/get-checksums.sh
+xray_exporter_sha256 = ""   # obtain via scripts/get-checksums.sh (no upstream checksums file — pinned here)

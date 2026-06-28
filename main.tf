@@ -116,6 +116,7 @@ resource "hcloud_server" "conduit" {
     vless_domain          = var.vless_domain
     cloudflare_api_token  = var.cloudflare_api_token
     xray_exporter_version = var.xray_exporter_version
+    xray_exporter_sha256  = var.xray_exporter_sha256
     alloy_version         = var.alloy_version
     alloy_zip_sha256      = var.alloy_zip_sha256
   })
@@ -141,7 +142,7 @@ resource "local_file" "users_txt" {
 resource "local_file" "alloy_config" {
   filename        = "${path.module}/backups/alloy-config.alloy"
   file_permission = "0600"
-  content         = templatefile("${path.module}/alloy-config.alloy.tpl", {
+  content = templatefile("${path.module}/alloy-config.alloy.tpl", {
     grafana_cloud_url      = var.grafana_cloud_prometheus_url
     grafana_cloud_user     = var.grafana_cloud_prometheus_user
     grafana_cloud_password = var.grafana_cloud_api_key
