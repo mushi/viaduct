@@ -102,6 +102,11 @@ resource "google_kms_crypto_key" "vault_unseal" {
   key_ring = google_kms_key_ring.vault.id
   purpose  = "ENCRYPT_DECRYPT"
 
+  # Auto-rotate every 90 days. KMS retains prior versions for decrypt and Vault's
+  # gcpckms seal selects the version embedded in the ciphertext, so rotation is
+  # transparent to auto-unseal (new wraps use the new primary version).
+  rotation_period = "7776000s"
+
   lifecycle {
     prevent_destroy = true
   }
@@ -212,14 +217,24 @@ resource "google_compute_instance" "controlplane" {
     scopes = ["cloud-platform"]
   }
 
+  # Secure boot + vTPM + integrity monitoring (Ubuntu GCE images are
+  # shielded-VM compatible).
+  shielded_instance_config {
+    enable_secure_boot          = true
+    enable_vtpm                 = true
+    enable_integrity_monitoring = true
+  }
+
   metadata = {
-    ssh-keys       = "${var.ssh_user}:${var.ssh_public_key}"
-    startup-script = file("${path.module}/scripts/startup.sh")
-    region         = var.region
-    kms-keyring    = google_kms_key_ring.vault.name
-    kms-cryptokey  = google_kms_crypto_key.vault_unseal.name
-    vault-version  = var.vault_version
-    vault-addr-ip  = google_compute_address.controlplane.address
+    # Only the instance-level ssh-keys below grant access; ignore project-wide keys.
+    block-project-ssh-keys = "true"
+    ssh-keys               = "${var.ssh_user}:${var.ssh_public_key}"
+    startup-script         = file("${path.module}/scripts/startup.sh")
+    region                 = var.region
+    kms-keyring            = google_kms_key_ring.vault.name
+    kms-cryptokey          = google_kms_crypto_key.vault_unseal.name
+    vault-version          = var.vault_version
+    vault-addr-ip          = google_compute_address.controlplane.address
 
     spire-version         = var.spire_version
     spire-sha256          = var.spire_sha256

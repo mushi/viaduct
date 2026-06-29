@@ -20,11 +20,19 @@ spec:
     metadata: { labels: { app: alloy } }
     spec:
       serviceAccountName: vault-agent
-      securityContext: { runAsUser: 0 }
+      securityContext:
+        runAsUser: 0
+        seccompProfile: { type: RuntimeDefault }
       initContainers:
       - name: fetch-svid
         image: ghcr.io/spiffe/spire-agent:1.15.1
         command: ["/opt/spire/bin/spire-agent", "api", "fetch", "x509", "-socketPath", "/spiffe-workload-api/api.sock", "-write", "/svids"]
+        resources:
+          requests: { memory: 32Mi, cpu: 50m }
+          limits: { memory: 64Mi, cpu: 200m }
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities: { drop: [ALL] }
         volumeMounts:
         - { name: spiffe-workload-api, mountPath: /spiffe-workload-api, readOnly: true }
         - { name: svids, mountPath: /svids }
@@ -70,6 +78,12 @@ spec:
           }
           CFG
           echo "rendered config.alloy"
+        resources:
+          requests: { memory: 32Mi, cpu: 50m }
+          limits: { memory: 128Mi, cpu: 200m }
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities: { drop: [ALL] }
         volumeMounts:
         - { name: svids, mountPath: /svids }
         - { name: vault-ca, mountPath: /vault-ca }
@@ -80,7 +94,14 @@ spec:
         args: ["run", "/rendered/config.alloy", "--storage.path=/tmp/alloy", "--server.http.listen-addr=0.0.0.0:12345"]
         resources:
           requests: { memory: 96Mi, cpu: 100m }
-          limits: { memory: 256Mi }
+          limits: { memory: 256Mi, cpu: 500m }
+        livenessProbe:
+          tcpSocket: { port: 12345 }
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities: { drop: [ALL] }
         volumeMounts:
         - { name: rendered, mountPath: /rendered }
         - { name: alloy-tmp, mountPath: /tmp/alloy }
