@@ -100,9 +100,10 @@ e2-micro is *always*-free (indefinite), and every other line is billed in both p
 | **Total** | **≈ 14** | **≈ 27** | |
 
 Figures are approximate and region/FX-dependent; the AWS instance assumes on-demand 24/7
-(a 1-yr Savings Plan roughly halves it). AWS egress is the cost risk (100 GB/mo free, then
-~$0.09/GB) — the Conduit relay is **bandwidth-capped** and a host timer guardrail **auto-stops the
-instance near 90 GB/month**. **Lifecycle:** Hetzner is persistent (the live station); GCP + AWS
+(a 1-yr Savings Plan roughly halves it). AWS egress is the cost risk: **100 GB/mo out to the
+internet is free** — an ongoing, account-global allowance (not part of the t4g trial, and not
+per-region) — then ~**$0.11/GB** in ap-south-1 (Mumbai). The Conduit relay is **bandwidth-capped**
+and a host timer guardrail **auto-stops the instance near 90 GB/month**. **Lifecycle:** Hetzner is persistent (the live station); GCP + AWS
 are the lab and can be torn once they've served their educational purpose.
 
 ## Runbooks
