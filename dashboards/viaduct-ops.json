@@ -5,8 +5,8 @@
     "name": "mi5njxh",
     "namespace": "stacks-1631080",
     "uid": "e11f05f1-b43f-415a-aa34-138972b885c8",
-    "resourceVersion": "2071927003895824477",
-    "generation": 39,
+    "resourceVersion": "2071956564809351712",
+    "generation": 40,
     "creationTimestamp": "2026-06-29T18:03:09Z",
     "labels": {
       "grafana.app/deprecatedInternalID": "4503497269358592"
@@ -16,7 +16,7 @@
       "grafana.app/folder": "",
       "grafana.app/saved-from-ui": "Grafana Cloud",
       "grafana.app/updatedBy": "user:cflmtm5h6b6kgd",
-      "grafana.app/updatedTimestamp": "2026-06-30T12:01:06Z"
+      "grafana.app/updatedTimestamp": "2026-06-30T13:58:34Z"
     }
   },
   "spec": {
@@ -672,7 +672,7 @@
                       "options": {
                         "mode": "exclude",
                         "names": [
-                          "{instance=\"conduit-metrics.viaduct.svc.cluster.local:9090\", job=\"conduit\", node=\"aws\"}"
+                          "{instance=\"127.0.0.1:9090\", job=\"conduit\", node=\"hetzner\"}"
                         ],
                         "prefix": "All except:",
                         "readOnly": true
@@ -812,8 +812,8 @@
                 "showHeader": true,
                 "sortBy": [
                   {
-                    "desc": false,
-                    "displayName": "Conversion"
+                    "desc": true,
+                    "displayName": "Clients"
                   }
                 ]
               },
@@ -857,6 +857,10 @@
                       {
                         "id": "unit",
                         "value": "percentunit"
+                      },
+                      {
+                        "id": "custom.width",
+                        "value": 131
                       }
                     ]
                   },
@@ -870,6 +874,36 @@
                       {
                         "id": "unit",
                         "value": "short"
+                      },
+                      {
+                        "id": "custom.width",
+                        "value": 112
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "scope": "series",
+                      "options": "region"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 77
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "scope": "series",
+                      "options": "node"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 90
                       }
                     ]
                   }
@@ -1441,7 +1475,7 @@
                         "exemplar": false,
                         "expr": "conduit_is_live",
                         "instant": false,
-                        "legendFormat": "",
+                        "legendFormat": "{{node}}",
                         "range": true
                       }
                     },
