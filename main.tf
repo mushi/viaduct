@@ -126,6 +126,13 @@ resource "hcloud_server" "conduit" {
   })
 
   labels = { role = "conduit-station" }
+
+  # user_data (cloud-init) runs only at first boot; ongoing config is delivered by
+  # the provisioner, so user_data drift must NOT rebuild the live station
+  # Apply a cloud-init change deliberately with `-replace` when you truly intend a rebuild.
+  lifecycle {
+    ignore_changes = [user_data]
+  }
 }
 
 # ── users.txt (local file, uploaded by provisioner) ───────────────────────────

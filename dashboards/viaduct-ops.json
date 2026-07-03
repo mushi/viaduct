@@ -5,18 +5,17 @@
     "name": "mi5njxh",
     "namespace": "stacks-1631080",
     "uid": "e11f05f1-b43f-415a-aa34-138972b885c8",
-    "resourceVersion": "2071956564809351712",
-    "generation": 40,
+    "resourceVersion": "2073137931542856599",
+    "generation": 53,
     "creationTimestamp": "2026-06-29T18:03:09Z",
     "labels": {
       "grafana.app/deprecatedInternalID": "4503497269358592"
     },
     "annotations": {
       "grafana.app/createdBy": "user:cflmtm5h6b6kgd",
-      "grafana.app/folder": "",
       "grafana.app/saved-from-ui": "Grafana Cloud",
       "grafana.app/updatedBy": "user:cflmtm5h6b6kgd",
-      "grafana.app/updatedTimestamp": "2026-06-30T13:58:34Z"
+      "grafana.app/updatedTimestamp": "2026-07-03T20:12:54Z"
     }
   },
   "spec": {
@@ -49,7 +48,7 @@
         "spec": {
           "id": 1,
           "title": "AWS egress — MTD vs 90 GB cap (%)",
-          "description": "",
+          "description": "100GB/month available free. Cap set at 90GB to prevent exceeding limit. ",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -84,7 +83,7 @@
           "vizConfig": {
             "kind": "VizConfig",
             "group": "gauge",
-            "version": "13.2.0-28084260209",
+            "version": "13.2.0-28666480772",
             "spec": {
               "options": {
                 "barShape": "flat",
@@ -149,7 +148,7 @@
         "spec": {
           "id": 10,
           "title": "Conduit uptime",
-          "description": "",
+          "description": "Number of seconds since the service started",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -168,7 +167,7 @@
                       "spec": {
                         "editorMode": "code",
                         "expr": "conduit_uptime_seconds",
-                        "legendFormat": "__auto",
+                        "legendFormat": "{{node}}",
                         "range": true
                       }
                     },
@@ -184,7 +183,7 @@
           "vizConfig": {
             "kind": "VizConfig",
             "group": "timeseries",
-            "version": "13.2.0-28084260209",
+            "version": "13.2.0-28666480772",
             "spec": {
               "options": {
                 "annotations": {
@@ -305,7 +304,7 @@
           "vizConfig": {
             "kind": "VizConfig",
             "group": "stat",
-            "version": "13.2.0-28084260209",
+            "version": "13.2.0-28666480772",
             "spec": {
               "options": {
                 "colorMode": "none",
@@ -356,7 +355,7 @@
         "spec": {
           "id": 3,
           "title": "Hetzner Funnel",
-          "description": "Announcing -> Connecting -> Connected conversion",
+          "description": "Announcing -> Connecting -> Connected",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -375,7 +374,7 @@
                       "spec": {
                         "editorMode": "code",
                         "expr": "conduit_announcing{node=\"hetzner\"}",
-                        "legendFormat": "__auto",
+                        "legendFormat": "announcing",
                         "range": true
                       }
                     },
@@ -397,7 +396,7 @@
                         "editorMode": "code",
                         "expr": "conduit_connecting_clients{node=\"hetzner\"}",
                         "instant": false,
-                        "legendFormat": "__auto",
+                        "legendFormat": "connecting",
                         "range": true
                       }
                     },
@@ -419,7 +418,7 @@
                         "editorMode": "code",
                         "expr": "conduit_connected_clients{node=\"hetzner\"}",
                         "instant": false,
-                        "legendFormat": "__auto",
+                        "legendFormat": "connected",
                         "range": true
                       }
                     },
@@ -435,7 +434,7 @@
           "vizConfig": {
             "kind": "VizConfig",
             "group": "timeseries",
-            "version": "13.2.0-28084260209",
+            "version": "13.2.0-28666480772",
             "spec": {
               "options": {
                 "annotations": {
@@ -552,7 +551,7 @@
                       "spec": {
                         "editorMode": "code",
                         "expr": "100 * conduit_connected_clients{node=\"hetzner\"}\n  / clamp_min(conduit_connected_clients{node=\"hetzner\"} + conduit_connecting_clients{node=\"hetzner\"}, 1)",
-                        "legendFormat": "__auto",
+                        "legendFormat": "{{node}}",
                         "range": true
                       }
                     },
@@ -574,7 +573,7 @@
                         "editorMode": "code",
                         "expr": "100 * conduit_connected_clients{node=\"aws\"}\n  / clamp_min(conduit_connected_clients{node=\"aws\"} + conduit_connecting_clients{node=\"aws\"}, 1)",
                         "instant": false,
-                        "legendFormat": "__auto",
+                        "legendFormat": "{{node}}",
                         "range": true
                       }
                     },
@@ -590,7 +589,7 @@
           "vizConfig": {
             "kind": "VizConfig",
             "group": "timeseries",
-            "version": "13.2.0-28084260209",
+            "version": "13.2.0-28666480772",
             "spec": {
               "options": {
                 "annotations": {
@@ -664,32 +663,7 @@
                     }
                   }
                 },
-                "overrides": [
-                  {
-                    "__systemRef": "hideSeriesFrom",
-                    "matcher": {
-                      "id": "byNames",
-                      "options": {
-                        "mode": "exclude",
-                        "names": [
-                          "{instance=\"127.0.0.1:9090\", job=\"conduit\", node=\"hetzner\"}"
-                        ],
-                        "prefix": "All except:",
-                        "readOnly": true
-                      }
-                    },
-                    "properties": [
-                      {
-                        "id": "custom.hideFrom",
-                        "value": {
-                          "legend": false,
-                          "tooltip": true,
-                          "viz": true
-                        }
-                      }
-                    ]
-                  }
-                ]
+                "overrides": []
               }
             }
           }
@@ -805,7 +779,7 @@
           "vizConfig": {
             "kind": "VizConfig",
             "group": "table",
-            "version": "13.2.0-28084260209",
+            "version": "13.2.0-28666480772",
             "spec": {
               "options": {
                 "cellHeight": "sm",
@@ -937,7 +911,7 @@
                       "spec": {
                         "editorMode": "code",
                         "expr": "sum(rate(conduit_bytes_downloaded[5m])) / clamp_min(sum(conduit_connected_clients), 1)",
-                        "legendFormat": "__auto",
+                        "legendFormat": "all nodes combined",
                         "range": true
                       }
                     },
@@ -953,7 +927,7 @@
           "vizConfig": {
             "kind": "VizConfig",
             "group": "timeseries",
-            "version": "13.2.0-28084260209",
+            "version": "13.2.0-28666480772",
             "spec": {
               "options": {
                 "annotations": {
@@ -1028,32 +1002,7 @@
                     }
                   }
                 },
-                "overrides": [
-                  {
-                    "__systemRef": "hideSeriesFrom",
-                    "matcher": {
-                      "id": "byNames",
-                      "options": {
-                        "mode": "exclude",
-                        "names": [
-                          "sum(rate(conduit_bytes_downloaded[5m])) / clamp_min(sum(conduit_connected_clients), 1)"
-                        ],
-                        "prefix": "All except:",
-                        "readOnly": true
-                      }
-                    },
-                    "properties": [
-                      {
-                        "id": "custom.hideFrom",
-                        "value": {
-                          "legend": false,
-                          "tooltip": true,
-                          "viz": true
-                        }
-                      }
-                    ]
-                  }
-                ]
+                "overrides": []
               }
             }
           }
@@ -1064,7 +1013,7 @@
         "spec": {
           "id": 7,
           "title": "5. Host-constraint test — conversion % vs host load",
-          "description": "",
+          "description": "Is the host constraining conversion from connecting to connected? If not, it's likely",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -1083,7 +1032,7 @@
                       "spec": {
                         "editorMode": "code",
                         "expr": "100 * sum(conduit_connected_clients) / clamp_min(sum(conduit_connected_clients + conduit_connecting_clients), 1)",
-                        "legendFormat": "__auto",
+                        "legendFormat": "Combined conversion rate",
                         "range": true
                       }
                     },
@@ -1103,9 +1052,9 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "node_load1{node=\"hetzner\", instance=\"conduit-station\"}\n/ 2",
+                        "expr": "100 * node_memory_MemAvailable_bytes{node=\"hetzner\", instance=\"conduit-station\"}\n  / node_memory_MemTotal_bytes{node=\"hetzner\", instance=\"conduit-station\"}",
                         "instant": false,
-                        "legendFormat": "__auto",
+                        "legendFormat": "Hetzner mem committed",
                         "range": true
                       }
                     },
@@ -1125,9 +1074,10 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "node_load1{node=\"aws\"} / 2",
+                        "exemplar": false,
+                        "expr": "100 * node_memory_MemAvailable_bytes{node=\"aws\", instance=\"alloy-55955799bb-4lw2m\"}\n  / node_memory_MemTotal_bytes{node=\"aws\", instance=\"alloy-55955799bb-4lw2m\"}",
                         "instant": false,
-                        "legendFormat": "__auto",
+                        "legendFormat": "AWS mem committed",
                         "range": true
                       }
                     },
@@ -1143,7 +1093,7 @@
           "vizConfig": {
             "kind": "VizConfig",
             "group": "timeseries",
-            "version": "13.2.0-28084260209",
+            "version": "13.2.0-28666480772",
             "spec": {
               "options": {
                 "annotations": {
@@ -1166,6 +1116,7 @@
               },
               "fieldConfig": {
                 "defaults": {
+                  "unit": "percent",
                   "thresholds": {
                     "mode": "absolute",
                     "steps": [
@@ -1217,32 +1168,7 @@
                     }
                   }
                 },
-                "overrides": [
-                  {
-                    "matcher": {
-                      "id": "byFrameRefID",
-                      "options": "B"
-                    },
-                    "properties": [
-                      {
-                        "id": "custom.axisPlacement",
-                        "value": "right"
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byFrameRefID",
-                      "options": "C"
-                    },
-                    "properties": [
-                      {
-                        "id": "custom.axisPlacement",
-                        "value": "right"
-                      }
-                    ]
-                  }
-                ]
+                "overrides": []
               }
             }
           }
@@ -1272,7 +1198,7 @@
                       "spec": {
                         "editorMode": "code",
                         "expr": "conduit_announcing{node=\"aws\"}",
-                        "legendFormat": "__auto",
+                        "legendFormat": "announcing",
                         "range": true
                       }
                     },
@@ -1294,7 +1220,7 @@
                         "editorMode": "code",
                         "expr": "conduit_connecting_clients{node=\"aws\"}",
                         "instant": false,
-                        "legendFormat": "__auto",
+                        "legendFormat": "connecting",
                         "range": true
                       }
                     },
@@ -1316,7 +1242,7 @@
                         "editorMode": "code",
                         "expr": "conduit_connected_clients{node=\"aws\"}",
                         "instant": false,
-                        "legendFormat": "__auto",
+                        "legendFormat": "connected",
                         "range": true
                       }
                     },
@@ -1332,7 +1258,7 @@
           "vizConfig": {
             "kind": "VizConfig",
             "group": "timeseries",
-            "version": "13.2.0-28084260209",
+            "version": "13.2.0-28666480772",
             "spec": {
               "options": {
                 "annotations": {
@@ -1418,30 +1344,6 @@
                         "value": "right"
                       }
                     ]
-                  },
-                  {
-                    "__systemRef": "hideSeriesFrom",
-                    "matcher": {
-                      "id": "byNames",
-                      "options": {
-                        "mode": "exclude",
-                        "names": [
-                          "{__name__=\"conduit_connected_clients\", instance=\"conduit-metrics.viaduct.svc.cluster.local:9090\", job=\"conduit\", node=\"aws\"}"
-                        ],
-                        "prefix": "All except:",
-                        "readOnly": true
-                      }
-                    },
-                    "properties": [
-                      {
-                        "id": "custom.hideFrom",
-                        "value": {
-                          "legend": false,
-                          "tooltip": true,
-                          "viz": true
-                        }
-                      }
-                    ]
                   }
                 ]
               }
@@ -1453,8 +1355,8 @@
         "kind": "Panel",
         "spec": {
           "id": 9,
-          "title": "Hetzner Conduit Status",
-          "description": "",
+          "title": "Conduit Status",
+          "description": "Whether the service is connected to the Psiphon broker",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -1491,7 +1393,7 @@
           "vizConfig": {
             "kind": "VizConfig",
             "group": "stat",
-            "version": "13.2.0-28084260209",
+            "version": "13.2.0-28666480772",
             "spec": {
               "options": {
                 "colorMode": "background",
