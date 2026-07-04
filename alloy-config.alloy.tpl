@@ -38,6 +38,17 @@ prometheus.scrape "xray_user_stats" {
   scrape_interval = "30s"
 }
 
+// ── Scrape: probe stats ───────────────────────────────────────
+// Black-box go probe makes a request to x-ray every 60s,
+// collects SLIs.
+
+prometheus.scrape "xray_probe" {
+  targets = [{ "__address__" = "127.0.0.1:9110" }]
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+  job_name   = "xray_probe"
+  scrape_interval = "60s"
+}
+
 // ── Scrape: node (system) metrics ─────────────────────────────────────────
 // Alloy has a built-in node_exporter equivalent. Gives CPU, memory,
 // network I/O, and disk — useful for correlating traffic with system load.

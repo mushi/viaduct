@@ -17,3 +17,6 @@ backups/
 
 # Binaries
 probe/probe
+
+#Postmortems
+docs/postmortems/*.md

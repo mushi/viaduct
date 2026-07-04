@@ -6,6 +6,10 @@ terraform {
       source  = "hetznercloud/hcloud"
       version = "~> 1.49"
     }
+    cloudinit = {
+      source  = "hashicorp/cloudinit"
+      version = "~> 2.3"
+    }
     local = {
       source  = "hashicorp/local"
       version = "~> 2.5"
@@ -91,6 +95,41 @@ resource "hcloud_firewall" "conduit" {
   }
 }
 
+# ── cloud-init (gzip-compressed) ──────────────────────────────────────────────
+# The rendered cloud-config exceeds Hetzner's 32 KiB user_data limit, so we
+# gzip it. Hetzner only accepts UTF-8 user_data, so gzip must be base64-wrapped
+# (the cloudinit provider forces base64_encode=true whenever gzip=true). The box
+# base64-decodes and gunzips it automatically at first boot.
+
+data "cloudinit_config" "conduit" {
+  gzip          = true
+  base64_encode = true
+
+  part {
+    content_type = "text/cloud-config"
+    content = templatefile("${path.module}/cloud-init.yaml.tpl", {
+      conduit_version       = var.conduit_version
+      conduit_bandwidth     = var.conduit_bandwidth
+      conduit_max_clients   = var.conduit_max_clients
+      conduit_cpu_quota     = var.conduit_cpu_quota
+      conduit_sha256        = var.conduit_sha256
+      xray_version          = var.xray_version
+      xray_zip_sha256       = var.xray_zip_sha256
+      vless_sni             = var.vless_sni
+      vless_domain          = var.vless_domain
+      cloudflare_api_token  = var.cloudflare_api_token
+      xray_exporter_version = var.xray_exporter_version
+      xray_exporter_sha256  = var.xray_exporter_sha256
+      alloy_version         = var.alloy_version
+      alloy_zip_sha256      = var.alloy_zip_sha256
+      spire_agent_version   = var.spire_agent_version
+      spire_agent_sha256    = var.spire_agent_sha256
+      gcp_spire_server_ip   = var.gcp_spire_server_ip
+      trust_domain          = var.trust_domain
+    })
+  }
+}
+
 # ── Server ────────────────────────────────────────────────────────────────────
 
 resource "hcloud_server" "conduit" {
@@ -104,26 +143,10 @@ resource "hcloud_server" "conduit" {
   # vless_users is intentionally NOT in user_data.
   # It is managed via users.txt uploaded by the provisioner, so that adding
   # or removing users never forces a server rebuild.
-  user_data = templatefile("${path.module}/cloud-init.yaml.tpl", {
-    conduit_version       = var.conduit_version
-    conduit_bandwidth     = var.conduit_bandwidth
-    conduit_max_clients   = var.conduit_max_clients
-    conduit_cpu_quota     = var.conduit_cpu_quota
-    conduit_sha256        = var.conduit_sha256
-    xray_version          = var.xray_version
-    xray_zip_sha256       = var.xray_zip_sha256
-    vless_sni             = var.vless_sni
-    vless_domain          = var.vless_domain
-    cloudflare_api_token  = var.cloudflare_api_token
-    xray_exporter_version = var.xray_exporter_version
-    xray_exporter_sha256  = var.xray_exporter_sha256
-    alloy_version         = var.alloy_version
-    alloy_zip_sha256      = var.alloy_zip_sha256
-    spire_agent_version   = var.spire_agent_version
-    spire_agent_sha256    = var.spire_agent_sha256
-    gcp_spire_server_ip   = var.gcp_spire_server_ip
-    trust_domain          = var.trust_domain
-  })
+  #
+  # cloud-init is gzip+base64-compressed (see data.cloudinit_config.conduit
+  # above) because the rendered YAML exceeds Hetzner's 32 KiB user_data limit.
+  user_data = data.cloudinit_config.conduit.rendered
 
   labels = { role = "conduit-station" }
 
@@ -191,6 +214,7 @@ resource "null_resource" "provision" {
       BACKUPS_DIR  = "${path.module}/backups"
       USERS_FILE   = local_file.users_txt.filename
       ALLOY_CONFIG = local_file.alloy_config.filename
+      PROBE_SRC    = "${path.module}/probe"
 
       # SPIRE agent: provisioner fetches the trust bundle + a join token from
       # the GCP SPIRE server. GCP must be deployed (SPIRE server running) first.
