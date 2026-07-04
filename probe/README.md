@@ -12,14 +12,17 @@ Both the xray client and the probe run as unprivileged users.
 
 | Name | Help                                                            | 
 |------|-----------------------------------------------------------------|
+`probe_attempts_total` | Total number of probe attempts made. |
 `probe_success` | 1 if the last probe completed with the expected status, else 0. |
+`probe_last_success_timestamp_seconds` | Unix timestamp (seconds) of the last successful probe. |
 `probe_duration_seconds` | Total time for the last probe request.                          |
+`probe_request_duration_seconds` | Histogram of successful probe request durations.                          |
 `probe_http_status_code` | HTTP status of the last probe (want 204; 0 = no response).      |
 `probe_http_connect_seconds` | Request start to connection ready (SOCKS dial + Reality tunnel). |
 `probe_http_ttfb_seconds` | Request start to first response byte (full round trip). |
 `probe_failures_total` | Probe failures by reason. |
 
-###Use
+### Use
 
 `go build`
 
