@@ -25,7 +25,7 @@ const (
 	canaryInterval = 60 * time.Second
 	requestTimeout = 15 * time.Second
 	socksAddr      = "127.0.0.1:10808"
-	metricsAddr    = ":9110"
+	metricsAddr    = "127.0.0.1:9110"
 )
 
 type metrics struct {
@@ -103,6 +103,7 @@ func (m *metrics) fail(reason string) {
 func serveMetrics(gatherer prometheus.Gatherer) {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(gatherer, promhttp.HandlerOpts{}))
+	// nosemgrep: <use-tls> - loopback-only scrape, TLS buys nothing
 	log.Fatal(http.ListenAndServe(metricsAddr, mux))
 }
 
@@ -146,6 +147,9 @@ func probe(client *http.Client, m *metrics) {
 		_ = c.Close()
 	}
 
+	// nosemgrep: <http-customized-request> — intentional: canary rides inside the encrypted
+	// Reality tunnel; empty 204 carries no sensitive data; plaintext avoids a
+	// destination TLS handshake that would pollute the latency histogram.
 	request, err := http.NewRequest(http.MethodGet, canaryURL, nil)
 	if err != nil {
 		m.lastDuration.Set(time.Since(start).Seconds())

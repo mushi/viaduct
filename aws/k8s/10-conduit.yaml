@@ -22,6 +22,8 @@ spec:
   template:
     metadata: { labels: { app: conduit } }
     spec:
+      securityContext:
+        fsGroup: 65532          # PVC + emptyDir group-owned by the non-root conduit uid so it can write /data
       initContainers:
       - name: fetch-conduit
         image: alpine:3.20
@@ -55,6 +57,9 @@ spec:
           initialDelaySeconds: 30
           periodSeconds: 30
         securityContext:
+          runAsNonRoot: true
+          runAsUser: 65532       # arbitrary non-zero uid; conduit needs no root (no privileged ports)
+          runAsGroup: 65532
           allowPrivilegeEscalation: false
           capabilities: { drop: [ALL] }
           seccompProfile: { type: RuntimeDefault }

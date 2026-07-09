@@ -206,6 +206,12 @@ resource "aws_iam_role_policy" "guardrail" {
   })
 }
 
+# Session Manager policy
+resource "aws_iam_role_policy_attachment" "ssm" {
+  role       = aws_iam_role.spire.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
 # ─── Elastic IP (stable endpoint across rebuilds) ────────────────────────────
 # AWS bills all public IPv4 (~$3.60/mo) whether or not attached; a stable EIP is
 # worth it for a fixed SPIRE bundle endpoint + Conduit address.
