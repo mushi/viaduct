@@ -17,7 +17,7 @@ last 3 versions retained.
    ```
    Vault comes up auto-unsealed but **uninitialised**.
 
-2. SSH in (`viaduct@<ip>`), then:
+2. Connect over IAP (`gcloud compute ssh viaduct-controlplane --tunnel-through-iap`), then:
    ```sh
    export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true
    ```

@@ -32,8 +32,10 @@ resource "google_compute_address" "controlplane" {
 }
 
 # ─── Firewall ────────────────────────────────────────────────────────────────
-resource "google_compute_firewall" "ssh" {
-  name      = "viaduct-allow-ssh"
+# SSH via IAP TCP forwarding: traffic arrives only from Google's IAP proxy
+# range (35.235.240.0/20), IAM-gated.
+resource "google_compute_firewall" "iap_ssh" {
+  name      = "viaduct-allow-iap-ssh"
   network   = google_compute_network.viaduct.name
   direction = "INGRESS"
 
@@ -42,7 +44,7 @@ resource "google_compute_firewall" "ssh" {
     ports    = ["22"]
   }
 
-  source_ranges = var.admin_cidr
+  source_ranges = ["35.235.240.0/20"]
   target_tags   = ["viaduct-controlplane"]
 }
 
@@ -168,6 +170,7 @@ resource "google_project_service" "required" {
     "compute.googleapis.com",
     "iam.googleapis.com",
     "cloudresourcemanager.googleapis.com",
+    "iap.googleapis.com", # IAP TCP forwarding for SSH without public ingress
   ])
   project            = var.project_id
   service            = each.value

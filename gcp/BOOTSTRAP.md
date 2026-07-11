@@ -6,7 +6,7 @@ server, but Vault comes up **sealed + uninitialised** and SPIRE can't reach its
 UpstreamAuthority until the steps below exist. For *rebuild* recovery (Vault already
 initialised once), use [`RESTORE.md`](RESTORE.md) instead.
 
-All commands run on the GCP box over SSH (`viaduct@<ip>`).
+All commands run on the GCP box; reach it over IAP (`gcloud compute ssh viaduct-controlplane --tunnel-through-iap`) — no public SSH.
 
 ## 1. Initialise Vault → recovery keys offline
 

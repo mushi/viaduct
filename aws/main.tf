@@ -76,16 +76,6 @@ resource "aws_security_group" "spire" {
   tags        = { Name = "viaduct-aws-sg" }
 }
 
-resource "aws_vpc_security_group_ingress_rule" "ssh" {
-  for_each          = toset(var.admin_cidr)
-  security_group_id = aws_security_group.spire.id
-  description       = "SSH"
-  ip_protocol       = "tcp"
-  from_port         = 22
-  to_port           = 22
-  cidr_ipv4         = each.value
-}
-
 # SPIRE federation bundle endpoint (HTTPS), reached by the GCP SPIRE server.
 # Created only once federation_cidrs is non-empty (GCP server IP known).
 resource "aws_vpc_security_group_ingress_rule" "federation" {

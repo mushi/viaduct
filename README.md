@@ -9,7 +9,7 @@
 > and Vault in action. For the simpler single-node station deployment, see **`main`**.
 
 
-The total cost for all resources across the three clouds is ≈ $14/month USD *before end of 2026* (using an AWS t4g free trial). 
+The total cost for all resources across the three clouds is ≈ $17/month USD *before end of 2026* (using an AWS t4g free trial). 
 Do reconfirm the costs before running it (use the [resources breakdown](#cloud-cost-breakdown) below)!
 
 Deployment is **low-touch**, but not no-touch. Most of the work is done by terraform, but you'll need prerequisites and a handful of manual steps, mainly:
@@ -96,8 +96,8 @@ e2-micro is *always*-free (indefinite), and every other line is billed in both p
 | AWS t4g.small compute | 0 | ~13 | **free trial → 2026-12-31**, then on-demand 24/7 |
 | AWS EIP (public IPv4) | ~3.6 | ~3.6 | billed in-use |
 | AWS EBS gp3 root | ~1.8 | ~1.8 | ~20 GB, encrypted |
-| AWS KMS (SPIRE CA) | ~1.0 | ~1.0 | 1 customer key; **survives `terraform destroy`** |
-| **Total** | **≈ 14** | **≈ 27** | |
+| AWS KMS (SPIRE CA) | ~4.0 | ~4.0 | ~4 keys — SPIRE rotates an X.509 CA + JWT signer (A/B slots), briefly more mid-rotation; **survive `terraform destroy`** |
+| **Total** | **≈ 17** | **≈ 30** | |
 
 Figures are approximate and region/FX-dependent; the AWS instance assumes on-demand 24/7
 (a 1-yr Savings Plan roughly halves it). AWS egress is the cost risk: **100 GB/mo out to the
@@ -140,8 +140,10 @@ are the lab and can be torn once they've served their educational purpose.
 Each root is independent (local state). **Order matters: bring up the GCP control plane
 first** — the other nodes authenticate to its Vault/SPIRE; then Hetzner and AWS.
 
-1. **Shared SSH source.** Export your admin IP once (used by all three roots):
-   `export TF_VAR_admin_cidr='["x.x.x.x/32"]'`
+1. **Admin access.** Only Hetzner restricts SSH to your IP — export it once:
+   `export TF_VAR_admin_cidr='["x.x.x.x/32"]'`. GCP has no public SSH (reach it via IAP:
+   `gcloud compute ssh viaduct-controlplane --tunnel-through-iap`); AWS via SSM Session
+   Manager (`aws ssm start-session --target <id>`).
 2. **GCP control plane.** `cd gcp && cp terraform.tfvars.example terraform.tfvars`,
    fill it in, then `terraform init && terraform apply`.
    Vault comes up **sealed + uninitialised**.
@@ -206,7 +208,9 @@ prioritisation via [KhajuBridge](https://github.com/delejos/conduit-iran-khajubr
 
 Every node's **Grafana Alloy** scrapes local exporters and remote-writes to Grafana
 Cloud, labelled by node. Conduit usage → the [MoaV dashboard](https://github.com/shayanb/MoaV/blob/main/configs/monitoring/grafana/provisioning/dashboards/conduit.json); VLESS per-user stats →
-`dashboards/vless-xray-dashboard.json`; node metrics → Node Exporter (ID 1860). The AWS
+`dashboards/vless-xray-dashboard.json`; node metrics → Node Exporter (ID 1860). A blackbox **availability probe** exercises the
+VLESS/Reality path end-to-end each minute and exposes SLIs (success, latency histogram) on
+`:9110`; a dead-man's-switch alert fires if a node stops reporting. The AWS
 egress headroom is sent as `aws_mtd_egress_bytes` / `aws_egress_cap_bytes`. Vault /
 SPIRE / k8s telemetry will be monitored on a **separate** dashboard (planned).
 
@@ -216,6 +220,11 @@ SPIRE / k8s telemetry will be monitored on a **separate** dashboard (planned).
 - Secrets reach workloads at runtime via Vault Agent → **tmpfs**, not persistent disk; per-node disjoint secret sets cap lateral reach.
 - `backups/` and all `terraform.tfvars` are gitignored — they hold live keys/tokens.
 - Xray access log is `none` (no record of user destinations); `geoip:ir` / `geosite:category-ir` are routed to `block` (no proxying back into Iran — removes a fingerprint signal). Port 80 serves a decoy static site (anti-active-probing).
+- Admin access is identity-gated, not only IP-allowlisted: GCP via **IAP** TCP forwarding (no public SSH), AWS via **SSM** Session Manager.
+
+## Roadmap
+
+- Overlay a private **WireGuard** mesh across the three nodes so cross-cloud SPIRE / Vault / federation traffic (`:8081` / `:8200` / `:8443`) passes over a private network — removing the remaining public ingress and bringing Hetzner admin onto the mesh.
 
 ## License
 
