@@ -24,7 +24,7 @@ Deploys a Hetzner CX23 server (~€4/month) running:
 | **Grafana Alloy** | Metrics agent — scrapes all exporters, remote-writes to Grafana Cloud                                            |
 | **availability probe** | Black-box probe of the VLESS/Reality path (via a local SOCKS→Reality client) — exposes SLIs on `:9110` |
 
-All services run as unprivileged users under systemd. Ports 22, 80, 443, and 8443 are open inbound. Metrics are pushed outbound to Grafana Cloud — no inbound scrape port needed.
+All services run as unprivileged users under systemd. SSH is key-only with **no root login** — admin is via a `deploy` (automation) and `ops` (scoped, interactive) user, restricted to your IP via `admin_cidr`. Ports 22, 80, 443, and 8443 are open inbound; metrics are pushed outbound to Grafana Cloud — no inbound scrape port needed.
 
 ## Architecture
 
@@ -72,7 +72,7 @@ Each user gets **two client URIs** (saved to `backups/clients/<name>.txt`):
 - A [Hetzner Cloud](https://www.hetzner.com/cloud/) account
 - A domain name with [Cloudflare](https://cloudflare.com) as the DNS provider (free tier sufficient — used only for DNS-01 certificate issuance, not CDN proxying)
 - A [Grafana Cloud](https://grafana.com/auth/sign-up) account (free tier)
-- An SSH key pair on your local machine
+- Two SSH keypairs on your local machine — one for the automation `deploy` user, one for the interactive `ops` user
 
 ## First-time setup
 
@@ -97,7 +97,7 @@ Each user gets **two client URIs** (saved to `backups/clients/<name>.txt`):
 
 ```sh
 cp terraform.tfvars.example terraform.tfvars
-# Fill in: hcloud_token, ssh keys, vless_domain, vless_users,
+# Fill in: hcloud_token, ssh keys (deploy + ops_ssh_public_key), vless_domain, vless_users,
 # cloudflare_api_token, grafana_cloud_* values,
 # binary versions and checksums (run scripts/get-checksums.sh)
 
@@ -237,26 +237,28 @@ backups/
 
 ## Useful commands
 
+Interactive admin is the `ops` account (scoped sudo: service lifecycle + logs); anything broader runs as `deploy`. Use each identity's key — e.g. `ssh -i ~/.ssh/viaduct_ops ops@<ip>`, or configure `~/.ssh/config`.
+
 ```sh
 # Service status
-ssh root@<ip> 'systemctl status conduit xray xray-exporter xray-user-stats alloy nginx'
+ssh ops@<ip> 'sudo systemctl status conduit xray xray-exporter xray-user-stats alloy nginx probe xray-probe-client'
 
 # Logs
-ssh root@<ip> 'journalctl -u conduit -f'
-ssh root@<ip> 'journalctl -u xray -f'
-ssh root@<ip> 'journalctl -u alloy -f'
+ssh ops@<ip> 'sudo journalctl -u conduit -f'
+ssh ops@<ip> 'sudo journalctl -u xray -f'
+ssh ops@<ip> 'sudo journalctl -u alloy -f'
 
 # Check metrics endpoints (from the server)
-ssh root@<ip> 'curl -s http://127.0.0.1:9090/metrics | head -20'   # Conduit
-ssh root@<ip> 'curl -s http://127.0.0.1:9091/scrape  | head -20'   # xray-exporter
-ssh root@<ip> 'curl -s http://127.0.0.1:9092/metrics'              # xray-user-stats
-ssh root@<ip> 'curl -s http://127.0.0.1:9110/metrics'              # probe          
+ssh ops@<ip> 'curl -s http://127.0.0.1:9090/metrics | head -20'   # Conduit
+ssh ops@<ip> 'curl -s http://127.0.0.1:9091/scrape  | head -20'   # xray-exporter
+ssh ops@<ip> 'curl -s http://127.0.0.1:9092/metrics'              # xray-user-stats
+ssh ops@<ip> 'curl -s http://127.0.0.1:9110/metrics'              # probe          
 
 # Query xray Stats API directly
-ssh root@<ip> '/usr/local/bin/xray api statsquery --server=127.0.0.1:8080 --pattern=user'
+ssh ops@<ip> '/usr/local/bin/xray api statsquery --server=127.0.0.1:8080 --pattern=user'
 
-# Check Let's Encrypt certificate expiry
-ssh root@<ip> 'certbot certificates'
+# Check Let's Encrypt certificate expiry (reads root-only /etc/letsencrypt → deploy)
+ssh deploy@<ip> 'sudo certbot certificates'
 
 # Manually re-run provisioner without a full apply
 terraform apply -replace=null_resource.provision
@@ -298,6 +300,7 @@ Note: KhajuBridge is not managed by Terraform and must be reapplied manually aft
 
 ## Security notes
 
+- SSH is key-only with **no root login** (`PermitRootLogin no`). Two identities: `deploy` (automation/provisioner — broad sudo, honestly root-equivalent) and `ops` (interactive — sudo scoped to service lifecycle + logs, no file writes), on **separate keypairs**. `admin_cidr` restricts the source IP — one layer, not the only one.
 - `backups/` is gitignored. Store it in a password manager vault or encrypted drive.
 - The Alloy config contains your Grafana Cloud access-policy token — treat it like a password.
 - The Reality keypair is equivalent to a TLS private key — back it up and keep it private.
