@@ -4,8 +4,9 @@
 # ── Required ──────────────────────────────────────────────────────────────────
 
 hcloud_token         = "your-hetzner-api-token-here"
-ssh_public_key       = "ssh-ed25519 AAAA... your-key-here"
+ssh_public_key       = "ssh-ed25519 AAAA... your-deploy-key-here"
 ssh_private_key_path = "~/.ssh/id_ed25519"
+ops_ssh_public_key   = "ssh-ed25519 AAAA... your-ops-key-here"   # separate keypair for the interactive `ops` user
 
 # ── VLESS users ───────────────────────────────────────────────────────────────
 # Add/remove names and re-apply — no server rebuild needed.

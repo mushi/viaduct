@@ -119,6 +119,8 @@ resource "hcloud_server" "conduit" {
     xray_exporter_sha256  = var.xray_exporter_sha256
     alloy_version         = var.alloy_version
     alloy_zip_sha256      = var.alloy_zip_sha256
+    ssh_public_key        = var.ssh_public_key
+    ops_ssh_public_key    = var.ops_ssh_public_key
   })
 
   labels = { role = "conduit-station" }

@@ -5,12 +5,17 @@ variable "hcloud_token" {
 }
 
 variable "ssh_public_key" {
-  description = "SSH public key contents (e.g. contents of ~/.ssh/id_ed25519.pub). Registered with Hetzner and installed on the server."
+  description = "SSH public key for the automation `deploy` user, used by the Terraform provisioner (e.g. contents of ~/.ssh/id_ed25519.pub). Registered with Hetzner and installed on the server."
   type        = string
 }
 
 variable "ssh_private_key_path" {
   description = "Local filesystem path to the private SSH key matching ssh_public_key. Used by the Terraform provisioner script (never uploaded to the server). E.g. ~/.ssh/id_ed25519"
+  type        = string
+}
+
+variable "ops_ssh_public_key" {
+  description = "SSH public key for the interactive `ops` admin user — a separate identity from the automation `deploy` key. Generate a dedicated keypair (e.g. `ssh-keygen -t ed25519 -f ~/.ssh/viaduct_ops`), put the .pub contents here, and keep the private key for `ssh ops@<ip>`."
   type        = string
 }
 
