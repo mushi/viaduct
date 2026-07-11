@@ -22,7 +22,36 @@ packages:
   - certbot
   - python3-certbot-dns-cloudflare
 
+# ── Login users: deploy (automation) + ops (interactive, least-privilege) ────
+# Root SSH login is disabled (sshd drop-in below); admin is via these two only.
+users:
+  - default
+  - name: deploy
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+    # Provisioning needs near-root power (writes system configs, restarts
+    # services) — honestly root-equivalent. The gain over root SSH is a named,
+    # audited identity + no root login exposed, not a privilege boundary.
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+  - name: ops
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ${ops_ssh_public_key}
+    # Genuine least-privilege for interactive debugging: inspect + service
+    # lifecycle only, no file writes (systemctl fixed to status/restart/reload).
+    sudo: "ALL=(root) NOPASSWD: /usr/bin/systemctl status *, /usr/bin/systemctl restart *, /usr/bin/systemctl reload *, /usr/bin/journalctl *"
+
 write_files:
+
+  # ── SSH hardening: no root login, key-only, restrict to deploy + ops ───────
+  - path: /etc/ssh/sshd_config.d/10-hardening.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      AllowUsers deploy ops
 
   # ── Conduit systemd unit ──────────────────────────────────────────────────
   - path: /etc/systemd/system/conduit.service
@@ -876,6 +905,7 @@ runcmd:
 
   # ── Register units (do NOT start — provisioner does that) ─────────────────
   - systemctl daemon-reload
+  - systemctl reload ssh   # apply SSH hardening (root login off; deploy/ops only)
   - systemctl enable conduit.service xray.service xray-exporter.service xray-user-stats.service alloy.service nginx.service xray-probe-client.service probe.service
 
   # ── Signal cloud-init completion ──────────────────────────────────────────

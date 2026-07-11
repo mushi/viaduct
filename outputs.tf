@@ -7,36 +7,36 @@ output "server_ipv6" {
 }
 
 output "ssh_command" {
-  value = "ssh root@${hcloud_server.conduit.ipv4_address}"
+  value = "ssh ops@${hcloud_server.conduit.ipv4_address}"
 }
 
 output "conduit_status" {
-  value = "ssh root@${hcloud_server.conduit.ipv4_address} 'systemctl status conduit'"
+  value = "ssh ops@${hcloud_server.conduit.ipv4_address} 'sudo systemctl status conduit'"
 }
 
 output "conduit_logs" {
-  value = "ssh root@${hcloud_server.conduit.ipv4_address} 'journalctl -u conduit -f'"
+  value = "ssh ops@${hcloud_server.conduit.ipv4_address} 'sudo journalctl -u conduit -f'"
 }
 
 output "xray_status" {
-  value = "ssh root@${hcloud_server.conduit.ipv4_address} 'systemctl status xray xray-exporter'"
+  value = "ssh ops@${hcloud_server.conduit.ipv4_address} 'sudo systemctl status xray xray-exporter'"
 }
 
 output "xray_logs" {
-  value = "ssh root@${hcloud_server.conduit.ipv4_address} 'journalctl -u xray -f'"
+  value = "ssh ops@${hcloud_server.conduit.ipv4_address} 'sudo journalctl -u xray -f'"
 }
 
 output "alloy_status" {
-  value = "ssh root@${hcloud_server.conduit.ipv4_address} 'systemctl status alloy'"
+  value = "ssh ops@${hcloud_server.conduit.ipv4_address} 'sudo systemctl status alloy'"
 }
 
 output "alloy_logs" {
-  value = "ssh root@${hcloud_server.conduit.ipv4_address} 'journalctl -u alloy -f'"
+  value = "ssh ops@${hcloud_server.conduit.ipv4_address} 'sudo journalctl -u alloy -f'"
 }
 
 output "vless_client_uris" {
   description = "Print all per-user VLESS URIs. Also available locally in backups/clients/<name>.txt after apply."
-  value       = "ssh root@${hcloud_server.conduit.ipv4_address} 'for f in /etc/xray/clients/*.txt; do echo \"=== $f ===\"; cat \"$f\"; echo; done'"
+  value       = "cat ${path.module}/backups/clients/*.txt"
 }
 
 output "backups_dir" {

@@ -114,7 +114,7 @@ are the lab and can be torn once they've served their educational purpose.
 - Accounts on [Hetzner Cloud](https://www.hetzner.com/cloud/), [AWS](https://signin.aws.amazon.com/signup?request_type=register) and [GCP](https://docs.cloud.google.com/docs/get-started/)
 - A domain name with [Cloudflare](https://cloudflare.com) as the DNS provider (free tier sufficient — used only for DNS-01 certificate issuance, not CDN proxying)
 - A [Grafana Cloud](https://grafana.com/auth/sign-up) account (free tier)
-- An SSH key pair on your local machine
+- Two SSH keypairs on your local machine — one for the automation `deploy` user, one for the interactive `ops` user (Hetzner)
 
 ### First-time setup
 
@@ -140,8 +140,9 @@ are the lab and can be torn once they've served their educational purpose.
 Each root is independent (local state). **Order matters: bring up the GCP control plane
 first** — the other nodes authenticate to its Vault/SPIRE; then Hetzner and AWS.
 
-1. **Admin access.** Only Hetzner restricts SSH to your IP — export it once:
-   `export TF_VAR_admin_cidr='["x.x.x.x/32"]'`. GCP has no public SSH (reach it via IAP:
+1. **Admin access.** Only Hetzner exposes SSH — key-only, **no root login**, IP-restricted
+   (`export TF_VAR_admin_cidr='["x.x.x.x/32"]'`), via a `deploy` (automation) or `ops`
+   (scoped, interactive) user. GCP has no public SSH (reach it via IAP:
    `gcloud compute ssh viaduct-controlplane --tunnel-through-iap`); AWS via SSM Session
    Manager (`aws ssm start-session --target <id>`).
 2. **GCP control plane.** `cd gcp && cp terraform.tfvars.example terraform.tfvars`,
@@ -216,6 +217,7 @@ SPIRE / k8s telemetry will be monitored on a **separate** dashboard (planned).
 
 ## Security notes
 
+- Hetzner SSH is key-only with **no root login** — two identities on separate keypairs: `deploy` (automation, broad sudo) and `ops` (interactive, sudo scoped to service lifecycle + logs), IP-restricted via `admin_cidr`. GCP admin is via IAP, AWS via SSM — no public SSH on either.
 - Root CA keys never leave home: Vault PKI (`viaduct.gcp`) and AWS KMS (`viaduct.aws`).
 - Secrets reach workloads at runtime via Vault Agent → **tmpfs**, not persistent disk; per-node disjoint secret sets cap lateral reach.
 - `backups/` and all `terraform.tfvars` are gitignored — they hold live keys/tokens.

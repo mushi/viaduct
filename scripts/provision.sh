@@ -33,7 +33,7 @@ SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$HOME}"
 
 CONTROL_DIR=$(mktemp -d)
 CONTROL_SOCKET="${CONTROL_DIR}/ssh-ctl.sock"
-trap 'ssh -o ControlPath="${CONTROL_SOCKET}" -O exit root@${SERVER_IP} 2>/dev/null; rm -rf "${CONTROL_DIR}"' EXIT
+trap 'ssh -o ControlPath="${CONTROL_SOCKET}" -O exit deploy@${SERVER_IP} 2>/dev/null; rm -rf "${CONTROL_DIR}"' EXIT
 
 BASE_OPTS=(
   -i "${SSH_KEY_PATH}"
@@ -49,26 +49,37 @@ BASE_OPTS=(
   -o LogLevel=ERROR
 )
 
-SSH="ssh ${BASE_OPTS[*]} root@${SERVER_IP}"
+SSH="ssh ${BASE_OPTS[*]} deploy@${SERVER_IP}"
 # SCP also supports ControlPath — it reuses the master connection
 SCP="scp -q ${BASE_OPTS[*]}"
 
 log()    { echo "[provision] $*"; }
-remote() { $SSH -- "$@"; }
+# Provisioner connects as the non-root `deploy` user (root SSH login is disabled
+# in cloud-init). deploy has NOPASSWD sudo, so privileged work is `sudo`-wrapped.
+remote() { $SSH -- sudo "$@"; }
 
 upload() {
-  local src="$1" dst="$2" perms="${3:-}"
-  $SCP "$src" "root@${SERVER_IP}:${dst}"
-  if [[ -n "$perms" ]]; then
-    remote chmod "$perms" "$dst"
-  fi
+  local src="$1" dst="$2" perms="${3:-0644}"
+  # deploy can't write system paths directly; stage in /tmp, then install as root.
+  local stage
+  stage="/tmp/prov.$$.$(basename "$dst")"
+  $SCP "$src" "deploy@${SERVER_IP}:${stage}"
+  remote install -m "$perms" "$stage" "$dst"
+  $SSH -- rm -f "$stage"
   log "Uploaded $(basename "$src") → $dst"
 }
 
 download() {
   local src="$1" dst="$2"
-  $SCP "root@${SERVER_IP}:${src}" "$dst"
-  chmod 600 "$dst"
+  # Sources are root-owned/0600 → read via sudo cat. Stage to .partial so a
+  # missing source never leaves a truncated file in backups/.
+  if remote cat "$src" > "$dst.partial" 2>/dev/null; then
+    mv "$dst.partial" "$dst"
+    chmod 600 "$dst"
+  else
+    rm -f "$dst.partial"
+    return 1
+  fi
 }
 
 # ── 1. Wait for the server, then for cloud-init ───────────────────────────────
@@ -123,7 +134,7 @@ while true; do
   CI_STATUS=$(remote "cloud-init status" 2>/dev/null || true)
   if echo "$CI_STATUS" | grep -q "status: error"; then
     log "ERROR: cloud-init finished with errors — a runcmd step failed."
-    log "  ssh root@${SERVER_IP} 'cloud-init status --long; journalctl -u cloud-init --no-pager -n 100'"
+    log "  ssh deploy@${SERVER_IP} 'sudo cloud-init status --long; sudo journalctl -u cloud-init --no-pager -n 100'"
     exit 1
   fi
   if echo "$CI_STATUS" | grep -q "status: done" && remote "test -f /var/lib/cloud-init-done" 2>/dev/null; then
@@ -132,7 +143,7 @@ while true; do
   fi
   if (( SECONDS >= CI_DEADLINE )); then
     log "ERROR: timed out after 10 min waiting for cloud-init (status may be stuck 'running')."
-    log "  ssh root@${SERVER_IP} 'cloud-init status --long; journalctl -u cloud-init --no-pager -n 100'"
+    log "  ssh deploy@${SERVER_IP} 'sudo cloud-init status --long; sudo journalctl -u cloud-init --no-pager -n 100'"
     exit 1
   fi
   log "  cloud-init still running..."
@@ -237,8 +248,10 @@ if [[ -n "${GCP_SERVER_IP:-}" ]]; then
     [[ -n "$TOKEN" ]] || { log "ERROR: failed to mint SPIRE join token from GCP server."; exit 1; }
 
     upload "${CONTROL_DIR}/bundle.crt" "/opt/spire/agent/bootstrap.crt" "644"
-    remote "umask 077; printf 'JOIN_TOKEN_ARG=-joinToken %s\n' '$TOKEN' > /opt/spire/agent/join.env"
-    remote "systemctl daemon-reload && systemctl enable --now spire-agent"
+    # Compound command (umask + redirect to a root-owned path) must run wholly
+    # as root — pipe the content in and let a single sudo shell write it 0600.
+    printf 'JOIN_TOKEN_ARG=-joinToken %s\n' "$TOKEN" | $SSH -- "sudo sh -c 'umask 077; cat > /opt/spire/agent/join.env'"
+    $SSH -- "sudo sh -c 'systemctl daemon-reload && systemctl enable --now spire-agent'"
     sleep 3
     if remote "systemctl is-active --quiet spire-agent"; then
       log "SPIRE agent attested and running."
@@ -275,7 +288,7 @@ while IFS= read -r rf; do
   if download "$rf" "$BACKUPS_DIR/clients/$name"; then
     log "  Saved backups/clients/$name"
   fi
-done < <(remote "ls /etc/xray/clients/*.uuid /etc/xray/clients/*.txt 2>/dev/null || true")
+done < <($SSH -- "sudo sh -c 'ls /etc/xray/clients/*.uuid /etc/xray/clients/*.txt 2>/dev/null || true'")
 
 log ""
 log "Provisioning complete."

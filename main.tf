@@ -126,6 +126,8 @@ data "cloudinit_config" "conduit" {
       spire_agent_sha256    = var.spire_agent_sha256
       gcp_spire_server_ip   = var.gcp_spire_server_ip
       trust_domain          = var.trust_domain
+      ssh_public_key        = var.ssh_public_key
+      ops_ssh_public_key    = var.ops_ssh_public_key
     })
   }
 }
