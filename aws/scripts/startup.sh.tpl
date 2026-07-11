@@ -54,6 +54,7 @@ server {
   log_level             = "INFO"
   ca_ttl                = "168h"
   default_x509_svid_ttl = "1h"
+  disable_jwt_svids     = true
 
   federation {
     bundle_endpoint {
