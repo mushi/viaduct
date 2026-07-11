@@ -37,6 +37,17 @@ prometheus.scrape "xray_user_stats" {
   scrape_interval = "30s"
 }
 
+// ── Scrape: availability probe SLIs ───────────────────────────────────────
+// Black-box Go probe exercises the VLESS/Reality path via a local SOCKS
+// client and exposes SLIs (success, latency histogram) on 127.0.0.1:9110.
+
+prometheus.scrape "xray_probe" {
+  targets = [{ "__address__" = "127.0.0.1:9110" }]
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+  job_name   = "xray_probe"
+  scrape_interval = "60s"
+}
+
 // ── Scrape: node (system) metrics ─────────────────────────────────────────
 // Alloy has a built-in node_exporter equivalent. Gives CPU, memory,
 // network I/O, and disk — useful for correlating traffic with system load.

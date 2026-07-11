@@ -22,6 +22,7 @@ set -euo pipefail
 : "${BACKUPS_DIR:?}"
 : "${USERS_FILE:?}"
 : "${ALLOY_CONFIG:?}"
+: "${PROBE_SRC:?}"
 
 # Expand ~ in SSH_KEY_PATH (Terraform passes it literally if set in tfvars)
 SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$HOME}"
@@ -39,7 +40,7 @@ BASE_OPTS=(
   -o StrictHostKeyChecking=accept-new
   -o UserKnownHostsFile="${BACKUPS_DIR}/known_hosts"
   -o BatchMode=yes
-  -o ConnectTimeout=30
+  -o ConnectTimeout=10
   -o ControlMaster=auto
   -o ControlPath="${CONTROL_SOCKET}"
   -o ControlPersist=60
@@ -70,42 +71,70 @@ download() {
   chmod 600 "$dst"
 }
 
-# ── 1. Wait for cloud-init, establishing the master connection ────────────────
-# The first SSH call establishes the ControlMaster. We use a longer timeout
-# here since the server may still be booting.
+# ── 1. Wait for the server, then for cloud-init ───────────────────────────────
+# Two bounded phases so a permanent problem fails fast instead of burning the
+# whole budget (the failure mode that prolonged the 2026-07-04 DR outage, where
+# a stale host key made the old single loop wait ~55 min before giving up):
+#   A. Wait for SSH to work at all — the box may still be booting. Classify the
+#      failure: a connection-level error means "still booting, retry"; a host-key
+#      or auth error is permanent, so bail immediately with the cause + fix.
+#   B. Once SSH works, wait for cloud-init to finish. Iterations are fast (the
+#      connection is already up), and it's bounded so a *hung* cloud-init
+#      (status stuck 'running', sentinel never written) can't stall for ~an hour.
 
+# A `terraform -replace` rebuild keeps the static IP but regenerates the SSH
+# host keys. Drop any stale key for this IP from our dedicated known_hosts so
+# the SSH below can accept-new the fresh key instead of hard-failing on a
+# changed host key (StrictHostKeyChecking=accept-new rejects *changed* keys).
+ssh-keygen -R "${SERVER_IP}" -f "${BACKUPS_DIR}/known_hosts" >/dev/null 2>&1 || true
+
+# ── Phase A: wait for SSH to succeed (bounded ~10 min); establishes the master.
+log "Waiting for ${SERVER_IP} to accept SSH (up to 10 min)..."
+BOOT_DEADLINE=$(( SECONDS + 600 ))
+until ssh_err=$($SSH -- true 2>&1); do
+  # $SSH returned non-zero. A connection-level failure (refused / timed out /
+  # no route) means the box is still booting → keep waiting. A host-key or auth
+  # failure will NEVER resolve by retrying → fail fast with the cause.
+  if echo "$ssh_err" | grep -qiE 'host key|identification has changed|permission denied|authenticat'; then
+    log "ERROR: SSH to ${SERVER_IP} failed for a non-transient reason — not a boot delay:"
+    printf '%s\n' "$ssh_err" | sed 's/^/  | /'
+    log "  If the host key changed on a rebuild, clear it and re-apply:"
+    log "    ssh-keygen -R ${SERVER_IP} -f ${BACKUPS_DIR}/known_hosts"
+    exit 1
+  fi
+  if (( SECONDS >= BOOT_DEADLINE )); then
+    log "ERROR: timed out after 10 min — ${SERVER_IP} never accepted SSH. Last error:"
+    printf '%s\n' "$ssh_err" | sed 's/^/  | /'
+    exit 1
+  fi
+  log "  not reachable yet (still booting?), retrying in 10s..."
+  sleep 10
+done
+log "SSH established."
+
+# ── Phase B: wait for cloud-init to finish (fast iterations; the master is up).
 log "Waiting for cloud-init to finish (up to 10 min)..."
-for i in $(seq 1 60); do
-  if $SSH -o ConnectTimeout=30 -- "test -f /var/lib/cloud-init-done" 2>/dev/null; then
-    # Sentinel found — but runcmd continues past failures by default, so the
-    # sentinel can exist even when an earlier step errored. Check status too.
-    CI_STATUS=$($SSH -- "cloud-init status 2>/dev/null" 2>/dev/null || true)
-    if echo "$CI_STATUS" | grep -q "error"; then
-      log "ERROR: cloud-init finished with errors — a runcmd step failed."
-      log "  ssh root@${SERVER_IP} 'journalctl -u cloud-init --no-pager -n 100'"
-      exit 1
-    fi
+CI_DEADLINE=$(( SECONDS + 600 ))
+while true; do
+  # 'cloud-init status' prints 'status: done' | 'running' | 'error'. runcmd
+  # continues past failures by default, so an early step can fail and still
+  # write the sentinel — hence we require BOTH status=done AND the sentinel.
+  CI_STATUS=$(remote "cloud-init status" 2>/dev/null || true)
+  if echo "$CI_STATUS" | grep -q "status: error"; then
+    log "ERROR: cloud-init finished with errors — a runcmd step failed."
+    log "  ssh root@${SERVER_IP} 'cloud-init status --long; journalctl -u cloud-init --no-pager -n 100'"
+    exit 1
+  fi
+  if echo "$CI_STATUS" | grep -q "status: done" && remote "test -f /var/lib/cloud-init-done" 2>/dev/null; then
     log "cloud-init complete."
     break
   fi
-
-  # Detect cloud-init failure early — if it has finished but never wrote
-  # the sentinel, it means a runcmd step failed (e.g. bad checksum or 404).
-  # 'cloud-init status' exits 2 when cloud-init finished with errors.
-  CLOUD_STATUS=$($SSH -o ConnectTimeout=30 -- "cloud-init status 2>/dev/null; echo exit:$?" 2>/dev/null || true)
-  if echo "$CLOUD_STATUS" | grep -q "exit:0" && echo "$CLOUD_STATUS" | grep -q "error\|Error"; then
-    log "ERROR: cloud-init reported an error. Check logs on the server:"
-    log "  ssh root@${SERVER_IP} 'journalctl -u cloud-init --no-pager -n 50'"
+  if (( SECONDS >= CI_DEADLINE )); then
+    log "ERROR: timed out after 10 min waiting for cloud-init (status may be stuck 'running')."
+    log "  ssh root@${SERVER_IP} 'cloud-init status --long; journalctl -u cloud-init --no-pager -n 100'"
     exit 1
   fi
-  if echo "$CLOUD_STATUS" | grep -q "status: error"; then
-    log "ERROR: cloud-init status is 'error'. Check logs on the server:"
-    log "  ssh root@${SERVER_IP} 'journalctl -u cloud-init --no-pager -n 50'"
-    exit 1
-  fi
-
-  [[ $i -eq 60 ]] && { log "ERROR: timed out waiting for cloud-init."; exit 1; }
-  log "  waiting... ($i/60)"
+  log "  cloud-init still running..."
   sleep 10
 done
 
@@ -163,16 +192,25 @@ remote chown root:alloy /etc/alloy/config.alloy
 log "Running xray-setup.sh --regen..."
 remote /usr/local/sbin/xray-setup.sh --regen
 
+# ── 7b. Build + upload the probe binary (linux/amd64) ─────────────────────────
+log "Building probe (linux/amd64)..."
+( cd "$PROBE_SRC" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "${CONTROL_DIR}/probe" . )
+# Upload to a temp path then atomically mv into place. A direct scp truncates
+# the destination, which the kernel refuses (ETXTBSY) when probe.service is
+# already running the old binary; rename swaps the inode without touching it.
+upload "${CONTROL_DIR}/probe" "/usr/local/bin/probe.new" "755"
+remote mv -f /usr/local/bin/probe.new /usr/local/bin/probe
+
 # ── 8. Start / restart all services ──────────────────────────────────────────
 
 log "Starting services..."
-remote systemctl restart conduit xray xray-exporter xray-user-stats alloy nginx
+remote systemctl restart conduit xray xray-exporter xray-user-stats alloy nginx xray-probe-client probe
 
 sleep 5
-if remote systemctl is-active --quiet conduit xray xray-exporter xray-user-stats alloy nginx; then
+if remote systemctl is-active --quiet conduit xray xray-exporter xray-user-stats alloy nginx xray-probe-client probe; then
   log "All services active."
 else
-  log "WARNING: one or more services failed to start. Check: journalctl -u conduit -u xray -u xray-exporter -u xray-user-stats -u alloy -u nginx"
+  log "WARNING: one or more services failed to start. Check: journalctl -u conduit -u xray -u xray-exporter -u xray-user-stats -u alloy -u nginx -u xray-probe-client -u probe"
 fi
 
 # ── 9. Download fresh backups ─────────────────────────────────────────────────

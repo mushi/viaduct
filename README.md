@@ -22,6 +22,7 @@ Deploys a Hetzner CX23 server (~€4/month) running:
 | **xray-exporter** | Prometheus exporter for Xray inbound/system traffic stats                                                        |
 | **xray-user-stats** | Sidecar exporter for per-user traffic bytes (from Xray Stats API)                                                |
 | **Grafana Alloy** | Metrics agent — scrapes all exporters, remote-writes to Grafana Cloud                                            |
+| **availability probe** | Black-box probe of the VLESS/Reality path (via a local SOCKS→Reality client) — exposes SLIs on `:9110` |
 
 All services run as unprivileged users under systemd. Ports 22, 80, 443, and 8443 are open inbound. Metrics are pushed outbound to Grafana Cloud — no inbound scrape port needed.
 
@@ -50,6 +51,7 @@ All services run as unprivileged users under systemd. Ports 22, 80, 443, and 844
 │  conduit        ── :9090/metrics ──┐                                    │
 │  xray-exporter  ── :9091/scrape  ──┤                                    │
 │  xray-user-stats── :9092/metrics ──┤                                    │
+│  probe          ── :9110/metrics ──┤                                    │
 │  alloy (node exporter built-in)    │                                    │
 │       └── remote-write (HTTPS) ────┴───────────────────────────────►    │
 │                                                                         │
@@ -109,8 +111,20 @@ After `apply`, the provisioner:
 2. Uploads any backup files (preserving Conduit identity, Reality keypair, UUIDs)
 3. Uploads `users.txt` and `alloy-config.alloy` (with Grafana credentials)
 4. Runs `xray-setup.sh --regen`
-5. Starts all six services
+5. Starts all eight services
 6. Downloads fresh backups to `backups/`
+
+## Observability
+
+Grafana Alloy runs on the host, scrapes the local exporters, and **remote-writes** (HTTPS, push) to Grafana Cloud — so there's no inbound scrape port to expose. Collected signals:
+
+- **Conduit** relay metrics (`:9090`) — throughput and connection stats
+- **Xray** inbound and system stats via `xray-exporter` (`:9091`)
+- **Per-user** uplink/downlink bytes via `xray-user-stats` (`:9092`)
+- **Host / system** metrics via Alloy's built-in node exporter
+- **Availability** — a black-box probe exercises the VLESS/Reality path each minute and exposes SLIs (success, latency histogram) on `:9110`
+
+Visualise them with the dashboards below.
 
 ## Dashboards
 
@@ -163,6 +177,7 @@ cloud-init runs fresh. The provisioner uploads:
 │  conduit        ──── :9090/metrics ──┐              │
 │  xray-exporter  ──── :9091/scrape  ──┤              │
 │  xray-user-stats──── :9092/metrics ──┤              │
+│  probe          ──── :9110/metrics ──┤              │
 │  alloy (node exporter built-in)      │              │
 │       └── remote-write (HTTPS out) ──┴───────────►  │
 │                                                     │
@@ -235,6 +250,7 @@ ssh root@<ip> 'journalctl -u alloy -f'
 ssh root@<ip> 'curl -s http://127.0.0.1:9090/metrics | head -20'   # Conduit
 ssh root@<ip> 'curl -s http://127.0.0.1:9091/scrape  | head -20'   # xray-exporter
 ssh root@<ip> 'curl -s http://127.0.0.1:9092/metrics'              # xray-user-stats
+ssh root@<ip> 'curl -s http://127.0.0.1:9110/metrics'              # probe          
 
 # Query xray Stats API directly
 ssh root@<ip> '/usr/local/bin/xray api statsquery --server=127.0.0.1:8080 --pattern=user'

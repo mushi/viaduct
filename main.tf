@@ -180,6 +180,7 @@ resource "null_resource" "provision" {
       BACKUPS_DIR  = "${path.module}/backups"
       USERS_FILE   = local_file.users_txt.filename
       ALLOY_CONFIG = local_file.alloy_config.filename
+      PROBE_SRC    = "${path.module}/probe"
     }
   }
 

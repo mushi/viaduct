@@ -96,6 +96,68 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 
+  # ── Xray probe SOCKS-client systemd unit ─────────────────────────────────────────
+  - path: /etc/systemd/system/xray-probe-client.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Xray VLESS/Reality client — SOCKS proxy for the availability probe
+      Documentation=https://xtls.github.io
+      After=network-online.target xray.service
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      User=xray
+      Group=xray
+      ExecStart=/usr/local/bin/xray run -config /etc/xray/probe-client.json
+      Restart=always
+      RestartSec=10
+      TimeoutStopSec=30
+
+      # Drop all caps
+      CapabilityBoundingSet=
+
+      NoNewPrivileges=true
+      PrivateTmp=true
+      ProtectSystem=strict
+      ProtectHome=true
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # ── Xray probe systemd unit ─────────────────────────────────────────────────────
+  - path: /etc/systemd/system/probe.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Xray VLESS/Reality availability probe — exposes :9110/metrics
+      Documentation=https://github.com/mushi/viaduct/tree/main/probe
+      After=network-online.target xray-probe-client.service
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      User=probe
+      Group=probe
+      ExecStart=/usr/local/bin/probe
+      Restart=always
+      RestartSec=10
+      TimeoutStopSec=30
+
+      # Drop all caps
+      CapabilityBoundingSet=
+
+      NoNewPrivileges=true
+      PrivateTmp=true
+      ProtectSystem=strict
+      ProtectHome=true
+
+      [Install]
+      WantedBy=multi-user.target
+
   # ── xray-exporter systemd unit ────────────────────────────────────────────
   # Scrapes Xray's internal Stats API (gRPC on 127.0.0.1:8080) and exposes
   # Prometheus metrics on 127.0.0.1:9091. Also parses access.log for per-user
@@ -420,6 +482,56 @@ write_files:
           echo "Generated UUID for: $USERNAME"
         fi
 
+        if [[ "$USERNAME" == "probe" ]]; then
+          cat > "$CONFIG_DIR/probe-client.json" <<PROBEJSON
+      {
+        "log": { "loglevel": "warning" },
+        "inbounds": [
+          {
+            "tag": "socks-in",
+            "listen": "127.0.0.1",
+            "port": 10808,
+            "protocol": "socks",
+            "settings": { "udp": false }
+          }
+        ],
+        "outbounds": [
+          {
+            "tag": "reality-out",
+            "protocol": "vless",
+            "settings": {
+              "vnext": [
+                {
+                  "address": "$SERVER_IP",
+                  "port": $REALITY_PORT,
+                  "users": [
+                    {
+                      "id": "$USER_UUID",
+                      "encryption": "none",
+                      "flow": "xtls-rprx-vision"
+                    }
+                  ]
+                }
+              ]
+            },
+            "streamSettings": {
+              "network": "tcp",
+              "security": "reality",
+              "realitySettings": {
+                "serverName": "$SNI",
+                "fingerprint": "chrome",
+                "publicKey": "$PUBLIC_KEY",
+                "shortId": "$SHORT_ID"
+              }
+            }
+          }
+        ]
+      }
+      PROBEJSON
+          chown xray:xray "$CONFIG_DIR/probe-client.json"
+          chmod 600 "$CONFIG_DIR/probe-client.json"
+        fi
+
         CLIENTS_JSON_REALITY+="$${SEPARATOR_R}
                 {
                   \"id\": \"$USER_UUID\",
@@ -565,6 +677,7 @@ runcmd:
   - useradd --system --no-create-home --shell /usr/sbin/nologin conduit
   - useradd --system --no-create-home --shell /usr/sbin/nologin xray
   - useradd --system --no-create-home --shell /usr/sbin/nologin alloy
+  - useradd --system --no-create-home --shell /usr/sbin/nologin probe
 
   # ── Directories ───────────────────────────────────────────────────────────
   - mkdir -p /var/lib/conduit/data
@@ -716,7 +829,7 @@ runcmd:
 
   # ── Register units (do NOT start — provisioner does that) ─────────────────
   - systemctl daemon-reload
-  - systemctl enable conduit.service xray.service xray-exporter.service xray-user-stats.service alloy.service nginx.service
+  - systemctl enable conduit.service xray.service xray-exporter.service xray-user-stats.service alloy.service nginx.service xray-probe-client.service probe.service
 
   # ── Signal cloud-init completion ──────────────────────────────────────────
   # Only reached if all checksum verifications above passed.
