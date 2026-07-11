@@ -20,9 +20,8 @@ variable "ops_ssh_public_key" {
 }
 
 variable "admin_cidr" {
-  description = "List of CIDR ranges allowed inbound SSH. Restrict to your own IP for security, e.g. [\"203.0.113.1/32\"]. Defaults to open — override this."
+  description = "List of CIDR ranges allowed inbound SSH. No default — you must supply your own IP /32 (fail closed), e.g. [\"203.0.113.1/32\"]. Set in terraform.tfvars or via TF_VAR_admin_cidr."
   type        = list(string)
-  default     = ["0.0.0.0/0", "::/0"]
 }
 
 variable "location" {
@@ -140,9 +139,11 @@ variable "cloudflare_api_token" {
 # These must be updated whenever a *_version variable changes.
 # Run scripts/get-checksums.sh to fetch the correct values for any version.
 #
-# Having checksums here (out-of-band from the download source) means a
-# compromised GitHub release cannot silently substitute a malicious binary —
-# cloud-init will abort with a checksum mismatch before executing anything.
+# Checksums pinned here are out-of-band from the download. This is trust-on-first-use:
+# it catches a release or CDN compromised AFTER you ran get-checksums.sh (cloud-init
+# aborts on mismatch), and get-checksums.sh cross-checks Xray/Grafana against their
+# own signed digest files (.dgst / SHA256SUMS). It does NOT catch a release that was
+# already malicious when pinned — that needs upstream provenance (SLSA / cosign).
 
 variable "conduit_sha256" {
   description = "SHA-256 of conduit-linux-amd64 for the pinned conduit_version. Run scripts/get-checksums.sh to obtain."
