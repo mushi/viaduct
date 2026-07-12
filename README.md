@@ -217,12 +217,12 @@ SPIRE / k8s telemetry will be monitored on a **separate** dashboard (planned).
 
 ## Security notes
 
-- Hetzner SSH is key-only with **no root login** — two identities on separate keypairs: `deploy` (automation, broad sudo) and `ops` (interactive, sudo scoped to service lifecycle + logs), IP-restricted via `admin_cidr`. GCP admin is via IAP, AWS via SSM — no public SSH on either.
-- Root CA keys never leave home: Vault PKI (`viaduct.gcp`) and AWS KMS (`viaduct.aws`).
-- Secrets reach workloads at runtime via Vault Agent → **tmpfs**, not persistent disk; per-node disjoint secret sets cap lateral reach.
-- `backups/` and all `terraform.tfvars` are gitignored — they hold live keys/tokens.
-- Xray access log is `none` (no record of user destinations); `geoip:ir` / `geosite:category-ir` are routed to `block` (no proxying back into Iran — removes a fingerprint signal). Port 80 serves a decoy static site (anti-active-probing).
-- Admin access is identity-gated, not only IP-allowlisted: GCP via **IAP** TCP forwarding (no public SSH), AWS via **SSM** Session Manager.
+- Hetzner SSH is key-only, with no root login. Two OS identities on separate keypairs: `deploy` (automation, broad sudo) and `ops` (interactive, sudo scoped to service lifecycle + logs), IP-restricted via `admin_cidr`. GCP admin is via IAP, AWS via SSM Session Manager, with no public SSH on either.
+- AWS IAM separates two least-privilege identities: a _deployment_ identity for running `terraform apply` (scoped to the resources it manages, explicitly denied KMS key deletion) and an MFA-enforced _operator_ identity for interactive admin. SPIRE creates KMS keys dynamically, so the deployment identity holds kms:Sign on * with destructive KMS actions withheld to bound the blast radius.
+- Root CA keys are non-exportable from Vault PKI (`viaduct.gcp`) and AWS KMS (`viaduct.aws`).
+- Secrets delivered to workloads at runtime via Vault Agent into tmpfs, never persistent disk; per-node disjoint secret sets.
+- `backups/` and all `terraform.tfvars` (live keys/tokens) are gitignored.
+- Xray access log is `none`, to preserve user privacy; `geoip:ir` / `geosite:category-ir` are routed to `block` (no proxying back into Iran, removing a fingerprint signal); port 80 serves a decoy static site (anti-active-probing).
 
 ## Roadmap
 
