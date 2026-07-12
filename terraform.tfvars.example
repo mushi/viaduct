@@ -26,9 +26,10 @@ grafana_cloud_api_key = "glc_eyJ..."
 # Permissions needed: Zone:DNS:Edit for your vless_domain zone.
 cloudflare_api_token = "your-cloudflare-api-token-here"
 
-# ── Recommended ───────────────────────────────────────────────────────────────
-
-# Restrict SSH to your own IP. Find it at https://ifconfig.me
+# ── Required: SSH allow-list ──────────────────────────────────────────────────
+# No default — terraform errors until this is set (fails closed). Restrict SSH to
+# your own IP /32: find it at https://ifconfig.me, then set it here or export
+# TF_VAR_admin_cidr='["203.0.113.1/32"]'
 # admin_cidr = ["203.0.113.1/32"]
 
 # ── Optional overrides ────────────────────────────────────────────────────────
