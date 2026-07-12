@@ -26,7 +26,7 @@ spec:
         fsGroup: 65532          # PVC + emptyDir group-owned by the non-root conduit uid so it can write /data
       initContainers:
       - name: fetch-conduit
-        image: alpine:3.20
+        image: alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc # 3.20
         command: ["/bin/sh", "-c"]
         args:
         - |
@@ -46,7 +46,7 @@ spec:
         volumeMounts: [{ name: shared, mountPath: /shared }]
       containers:
       - name: conduit
-        image: alpine:3.20
+        image: alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc # 3.20
         command: ["/shared/conduit", "start", "--data-dir", "/data", "--bandwidth", "15", "--max-common-clients", "5", "--metrics-addr", ":9090"]
         ports: [{ name: metrics, containerPort: 9090 }]
         resources:

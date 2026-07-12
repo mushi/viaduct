@@ -25,7 +25,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       initContainers:
       - name: fetch-svid
-        image: ghcr.io/spiffe/spire-agent:1.15.1
+        image: ghcr.io/spiffe/spire-agent@sha256:501ea7072748adb74d1f9ac3320ddceedcf3b8c4a1cc9d2b4bedd427d277475b # 1.15.1
         command: ["/opt/spire/bin/spire-agent", "api", "fetch", "x509", "-socketPath", "/spiffe-workload-api/api.sock", "-write", "/svids"]
         resources:
           requests: { memory: 32Mi, cpu: 50m }
@@ -37,7 +37,7 @@ spec:
         - { name: spiffe-workload-api, mountPath: /spiffe-workload-api, readOnly: true }
         - { name: svids, mountPath: /svids }
       - name: render-config
-        image: hashicorp/vault:2.0.2
+        image: hashicorp/vault@sha256:3fd53308acccd9e4e83fde3e6c6cf5b15e0f7fac1ff7510780b8b23f5e4c3de7 # 2.0.2
         env:
         - { name: VAULT_ADDR, value: "https://__GCP_CONTROL_PLANE_IP__:8200" }
         - { name: VAULT_CACERT, value: "/vault-ca/vault-ca.crt" }
@@ -90,7 +90,7 @@ spec:
         - { name: rendered, mountPath: /rendered }
       containers:
       - name: alloy
-        image: grafana/alloy:v1.8.3
+        image: grafana/alloy@sha256:ab04df3936e4d71d31b6f55e0c58a7e749091f59635dd8c2bc731ba1b6c93701 # v1.8.3
         args: ["run", "/rendered/config.alloy", "--storage.path=/tmp/alloy", "--server.http.listen-addr=0.0.0.0:12345"]
         resources:
           requests: { memory: 96Mi, cpu: 100m }
