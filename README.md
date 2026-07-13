@@ -3,10 +3,12 @@
 > This branch, `lab-multicloud-spire`, is a **three-cloud deployment** that runs a
 > bandwidth donation data plane (VLESS+Reality and Psiphon Conduit) with cross-cloud
 > **workload identity** (federated SPIRE) and **centralized secrets** (Vault). The data
-> plane is the same service the `main` branch provides single-node; this branch adds 
-> a second cloud node (running an egress-constrained Conduit, no VLESS) and a control plane to exercise cross-cloud identity and secrets
-> management. This adds nothing for users. It is useful if you want to see SPIFFE/SPIRE
-> and Vault in action. For the simpler single-node station deployment, see **`main`**.
+> plane extends the service the `main` branch provides single-node; this branch adds 
+> a second cloud node (running an egress-constrained Conduit) and a control plane 
+> to exercise cross-cloud identity and secrets management. 
+> **The extended architecture adds nothing for users**, (apart from a small bandwidth 
+> bump for Psiphon users); it is a control plane lab. 
+> For the simpler, single-node station deployment, see **`main`**.
 
 
 The total cost for all resources across the three clouds is ≈ $17/month USD *before end of 2026* (using an AWS t4g free trial). 
@@ -87,17 +89,17 @@ All-in estimate (USD/month, 24/7, excludes exceeding the AWS egress cap). The on
 thing that changes at the cliff is the AWS instance leaving its free trial; GCP's
 e2-micro is *always*-free (indefinite), and every other line is billed in both periods.
 
-| Line item | Before 2026-12-31 | After | Notes |
-|---|---|---|---|
-| Hetzner CX23 | ~4.3 | ~4.3 | €4; the always-on station, incl. 20 TB egress |
-| GCP e2-micro compute | 0 | 0 | always-free tier (us-central1), indefinite |
-| GCP external IPv4 | ~3.6 | ~3.6 | billed even on free-tier VMs |
-| GCP KMS + GCS snapshots | ~0.1 | ~0.1 | unseal key + small weekly Raft snapshots |
-| AWS t4g.small compute | 0 | ~13 | **free trial → 2026-12-31**, then on-demand 24/7 |
-| AWS EIP (public IPv4) | ~3.6 | ~3.6 | billed in-use |
-| AWS EBS gp3 root | ~1.8 | ~1.8 | ~20 GB, encrypted |
+| Line item | Before 2026-12-31 | After | Notes                                                                                                                    |
+|---|---|---|--------------------------------------------------------------------------------------------------------------------------|
+| Hetzner CX23 | ~4.3 | ~4.3 | €4; the always-on station, incl. 20 TB egress                                                                            |
+| GCP e2-micro compute | 0 | 0 | always-free tier (us-central1), indefinite                                                                               |
+| GCP external IPv4 | ~3.6 | ~3.6 | billed even on free-tier VMs                                                                                             |
+| GCP KMS + GCS snapshots | ~0.1 | ~0.1 | unseal key + small weekly Raft snapshots                                                                                 |
+| AWS t4g.small compute | 0 | ~13 | **free trial → 2026-12-31**, then on-demand 24/7                                                                         |
+| AWS EIP (public IPv4) | ~3.6 | ~3.6 | billed in-use                                                                                                            |
+| AWS EBS gp3 root | ~1.8 | ~1.8 | ~30 GB, encrypted                                                                                                        |
 | AWS KMS (SPIRE CA) | ~4.0 | ~4.0 | ~4 keys — SPIRE rotates an X.509 CA + JWT signer (A/B slots), briefly more mid-rotation; **survive `terraform destroy`** |
-| **Total** | **≈ 17** | **≈ 30** | |
+| **Total** | **≈ 17** | **≈ 30** |                                                                                                                          |
 
 Figures are approximate and region/FX-dependent; the AWS instance assumes on-demand 24/7
 (a 1-yr Savings Plan roughly halves it). AWS egress is the cost risk: **100 GB/mo out to the
