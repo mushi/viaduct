@@ -24,7 +24,7 @@ See the [runbooks](#runbooks) section for complete details.
 
 ## What
 
-Three nodes, each its **own Terraform root** (independent state, blast-radius isolation):
+Three nodes, each its **own Terraform root** (independent, isolated state):
 
 | Node | Cloud          | Trust domain | Runs |
 |---|----------------|---|---|
@@ -32,7 +32,7 @@ Three nodes, each its **own Terraform root** (independent state, blast-radius is
 | **Data plane** | Hetzner CX23   | `viaduct.gcp` (agent) | Xray VLESS + Conduit + SPIRE agent + Vault Agent |
 | **k8s node** | AWS t4g.small  | `viaduct.aws` | k3s + SPIRE server + agent + capped Conduit |
 
-**VLESS** (Xray-core): users connect with a client app (V2RayNG, v2rayN, Nekoray) that
+**VLESS** (Xray-core): users connect with a client app (e.g. V2RayNG, v2rayN, Nekoray) that
 proxies their device's traffic. **Conduit** (Psiphon in-proxy): relays for Psiphon
 clients via Psiphon's brokers — works even when the node IP is blocked.
 
