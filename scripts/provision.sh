@@ -231,20 +231,34 @@ fi
 # agent binary, config, and unit are installed by cloud-init; here we fetch the
 # bundle + a one-time join token from the GCP SPIRE server and start the agent.
 # GCP must be deployed (SPIRE server running) before Hetzner.
+#
+# GCP_SERVER_IP is the agent's *runtime* server address (used by cloud-init).
+# To *mint* the token we reach the server over IAP TCP forwarding, since GCP has
+# no public SSH — hence GCP_INSTANCE/GCP_ZONE (and gcloud) rather than ssh to :22.
 
 if [[ -n "${GCP_SERVER_IP:-}" ]]; then
   if remote "systemctl is-active --quiet spire-agent" 2>/dev/null; then
     log "SPIRE agent already running — skipping attestation."
   else
-    log "Fetching SPIRE trust bundle + join token from GCP server ${GCP_SERVER_IP}..."
+    command -v gcloud >/dev/null || { log "ERROR: gcloud not found; required to reach the IAP-only GCP SPIRE server."; exit 1; }
+    : "${GCP_INSTANCE:?GCP_INSTANCE required to reach the GCP SPIRE server via IAP}"
+    : "${GCP_ZONE:?GCP_ZONE required to reach the GCP SPIRE server via IAP}"
     GCP_KEY="${GCP_SSH_KEY_PATH/#\~/$HOME}"
-    GCP_OPTS=(-i "${GCP_KEY}" -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=30 -o LogLevel=ERROR)
-    # Drop any stale host key (the GCP node may have been rebuilt with a new one).
-    ssh-keygen -R "${GCP_SERVER_IP}" >/dev/null 2>&1 || true
-    GCP_SSH=(ssh "${GCP_OPTS[@]}" "${GCP_SSH_USER}@${GCP_SERVER_IP}")
+    log "Fetching SPIRE trust bundle + join token from GCP server ${GCP_INSTANCE} (via IAP)..."
+    # Reach the control plane through IAP TCP forwarding, reusing the existing
+    # instance-metadata key. gcloud tracks host keys by instance ID, so a rebuilt
+    # server does not jam on a stale key the way IP-keyed ssh did.
+    gcp_ssh() {
+      gcloud compute ssh "${GCP_SSH_USER}@${GCP_INSTANCE}" \
+        --zone "${GCP_ZONE}" ${GCP_PROJECT:+--project "${GCP_PROJECT}"} \
+        --tunnel-through-iap --ssh-key-file="${GCP_KEY}" \
+        --ssh-flag="-o StrictHostKeyChecking=accept-new" \
+        --ssh-flag="-o ConnectTimeout=30" \
+        --command "$1"
+    }
 
-    "${GCP_SSH[@]}" -- "sudo spire-server bundle show" > "${CONTROL_DIR}/bundle.crt"
-    TOKEN=$("${GCP_SSH[@]}" -- "sudo spire-server token generate -spiffeID spiffe://${TRUST_DOMAIN}/hetzner -ttl 600" | awk '/Token:/{print $2}')
+    gcp_ssh "sudo spire-server bundle show" > "${CONTROL_DIR}/bundle.crt"
+    TOKEN=$(gcp_ssh "sudo spire-server token generate -spiffeID spiffe://${TRUST_DOMAIN}/hetzner -ttl 600" | awk '/Token:/{print $2}')
     [[ -n "$TOKEN" ]] || { log "ERROR: failed to mint SPIRE join token from GCP server."; exit 1; }
 
     upload "${CONTROL_DIR}/bundle.crt" "/opt/spire/agent/bootstrap.crt" "644"

@@ -223,6 +223,9 @@ resource "null_resource" "provision" {
       GCP_SERVER_IP    = var.gcp_spire_server_ip
       GCP_SSH_KEY_PATH = var.gcp_ssh_key_path
       GCP_SSH_USER     = var.gcp_ssh_user
+      GCP_INSTANCE     = var.gcp_instance
+      GCP_ZONE         = var.gcp_zone
+      GCP_PROJECT      = var.gcp_project
       TRUST_DOMAIN     = var.trust_domain
     }
   }

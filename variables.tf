@@ -184,15 +184,33 @@ variable "gcp_spire_server_ip" {
 }
 
 variable "gcp_ssh_key_path" {
-  description = "Local path to the SSH private key for the GCP SPIRE server (used by the provisioner to mint a join token)."
+  description = "Local path to the SSH private key matching the GCP instance-metadata key. gcloud reuses it for the IAP tunnel when the provisioner mints a join token (--ssh-key-file)."
   type        = string
   default     = "~/.ssh/viaduct_lab"
 }
 
 variable "gcp_ssh_user" {
-  description = "SSH user on the GCP SPIRE server."
+  description = "SSH user on the GCP SPIRE server (the instance-metadata key user; gcloud reuses it over the IAP tunnel)."
   type        = string
   default     = "viaduct"
+}
+
+variable "gcp_instance" {
+  description = "Name of the GCP SPIRE-server instance. The provisioner mints the join token over IAP (`gcloud compute ssh --tunnel-through-iap`), targeting the instance by name/zone rather than a public :22. Must match `instance_name` in the gcp/ root. Required when gcp_spire_server_ip is set."
+  type        = string
+  default     = ""
+}
+
+variable "gcp_zone" {
+  description = "GCP zone of the SPIRE-server instance (must match the gcp/ root's zone). Used for the IAP tunnel. Required when gcp_spire_server_ip is set."
+  type        = string
+  default     = ""
+}
+
+variable "gcp_project" {
+  description = "GCP project ID for the IAP tunnel. Empty uses gcloud's active project."
+  type        = string
+  default     = ""
 }
 
 variable "trust_domain" {

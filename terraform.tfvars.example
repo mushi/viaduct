@@ -57,9 +57,16 @@ xray_exporter_sha256 = ""   # obtain via scripts/get-checksums.sh (no upstream c
 # ── SPIRE agent (multi-cloud lab — optional) ──────────────────────────────────
 # This node attests (join_token) to the SPIRE server in the gcp/ root. Deploy
 # gcp/ FIRST, then set gcp_spire_server_ip below. Leave it empty to skip SPIRE.
+# gcp_spire_server_ip is the agent's runtime server address. The provisioner
+# mints the join token over IAP (no public SSH on GCP), so it also needs the
+# instance name + zone below, plus gcloud installed and authed with
+# iap.tunnelResourceAccessor.
 # spire_agent_version  = "1.15.1"
 # spire_agent_sha256   = "e1b58f9f52f601dc35c3b56bad4c810dfb7faf50c8531bcecdb4f64ae3cc007a"
 # gcp_spire_server_ip  = ""                    # public IP of the GCP SPIRE server (from `terraform output` in gcp/)
+# gcp_instance         = "viaduct-controlplane"  # instance_name from the gcp/ root (target for the IAP tunnel)
+# gcp_zone             = "us-central1-a"         # must match the gcp/ root's zone
+# gcp_project          = ""                    # empty uses gcloud's active project
 # gcp_ssh_key_path     = "~/.ssh/viaduct_lab"
 # gcp_ssh_user         = "viaduct"
 # trust_domain         = "viaduct.gcp"
