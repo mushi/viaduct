@@ -61,7 +61,7 @@ func newMetrics(reg prometheus.Registerer) *metrics {
 		durationHist: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "probe_request_duration_seconds", // distinct name — gauge keeps probe_duration_seconds
 			Help:    "Histogram of successful probe request durations.",
-			Buckets: []float64{0.015, 0.02, 0.025, 0.03, 0.035, 0.04, 0.045, 0.05, 0.06, 0.08, 0.1, 0.15, 0.25, 0.5, 1},
+			Buckets: []float64{0.015, 0.02, 0.025, 0.03, 0.035, 0.04, 0.045, 0.05, 0.06, 0.08, 0.1, 0.15, 0.25, 0.5, 1, 5},
 		}),
 		statusCode: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "probe_http_status_code",

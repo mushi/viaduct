@@ -205,6 +205,11 @@ resource "null_resource" "provision" {
     server_id  = hcloud_server.conduit.id
     users_hash = sha256(local_file.users_txt.content)
     alloy_hash = sha256(local_file.alloy_config.content)
+    # Re-provision (rebuild + redeploy the probe) when any file under probe/
+    # changes. Covers *.go, go.mod, go.sum; also README, so a docs-only edit
+    # triggers a (harmless) re-provision. Narrow the glob to "**/*.go" plus
+    # go.mod/go.sum if you want to avoid that.
+    probe_hash = sha256(join("", [for f in fileset("${path.module}/probe", "**") : filesha256("${path.module}/probe/${f}")]))
   }
 
   provisioner "local-exec" {
