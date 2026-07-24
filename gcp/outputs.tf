@@ -3,6 +3,16 @@ output "instance_external_ip" {
   value       = google_compute_address.controlplane.address
 }
 
+output "instance_name" {
+  description = "Control-plane instance name. Consumed by the Hetzner root (via remote state) as the IAP target for the SPIRE provisioner."
+  value       = google_compute_instance.controlplane.name
+}
+
+output "zone" {
+  description = "Control-plane instance zone. Consumed by the Hetzner root (via remote state) as the IAP target for the SPIRE provisioner."
+  value       = google_compute_instance.controlplane.zone
+}
+
 output "vault_addr" {
   description = "Vault API address. Set VAULT_ADDR to this; the listener cert is self-signed (VAULT_CACERT=/opt/vault/tls/vault.crt on the node)."
   value       = "https://${google_compute_address.controlplane.address}:8200"

@@ -172,6 +172,24 @@ first** — the other nodes authenticate to its Vault/SPIRE; then Hetzner and AW
 8. **Verify.** SVIDs issuing (`spire-server entry show`), Vault Agent rendering secrets,
    metrics arriving in Grafana Cloud (all three `node` labels).
 
+#### 4. Applying changes
+
+Each root has local state; run `terraform apply` from that root's directory. What an
+apply does depends on the change:
+
+| Change | Command | Effect |
+|---|---|---|
+| Add/remove VLESS users, rotate Grafana Cloud creds, ship a new `probe/` build | `terraform apply` (repo root) | Re-runs `scripts/provision.sh` and restarts services (a few-second blip). No rebuild; existing users keep their UUIDs. |
+| Any edit to `cloud-init.yaml.tpl`, or toggling `enable_spire` (both take effect only at first boot) | `terraform apply -replace=hcloud_server.conduit` | Destroys and recreates the Hetzner server so cloud-init re-runs. A few-minute data-plane outage. |
+| GCP config | `cd gcp && terraform apply` | The readiness gate blocks until Vault is unsealed and the SPIRE server is active. |
+| GCP change needing an instance stop (`machine_type`, secure-boot/shielded config, service account) | `cd gcp && terraform apply -var 'allow_stopping_for_update=true'` | Stops and starts the instance; the gate confirms Vault and SPIRE return. |
+
+**A plain `terraform apply` never rebuilds the Hetzner server.** `user_data` (cloud-init) is
+under `ignore_changes`, so a plain apply silently skips cloud-init edits, `enable_spire`
+included. Use `-replace=hcloud_server.conduit` whenever the running instance must be
+replaced to pick up a first-boot change. For a full GCP instance replacement, see the
+[recovery runbook](gcp/RESTORE.md) (Vault must be restored from a snapshot).
+
 ### Recovery 
 See [Recovery runbook](gcp/RESTORE.md)
 
@@ -203,7 +221,7 @@ Hetzner runs the full VLESS station; AWS runs an egress-capped Conduit relay. Ea
 - **XHTTP/TLS** (`*-xhttp`) — to `example.com:8443` via Let's Encrypt + HTTP/2. For regions where the IP is blocked but the domain on :8443 is reachable.
 
 Add/revoke users by editing `vless_users` in `terraform.tfvars` and re-running
-`terraform apply` (no rebuild — existing users keep their UUIDs). Optional Iran traffic
+`terraform apply` (no rebuild; see the Applying changes table above). Optional Iran traffic
 prioritisation via [KhajuBridge](https://github.com/delejos/conduit-iran-khajubridge)
 (nftables; not Terraform-managed — reapply after a rebuild).
 

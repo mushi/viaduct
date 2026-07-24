@@ -33,6 +33,12 @@ variable "boot_image" {
   default     = "ubuntu-os-cloud/ubuntu-2404-lts-amd64"
 }
 
+variable "allow_stopping_for_update" {
+  description = "Permit Terraform to stop and start the instance to apply changes that require it (machine_type, shielded/secure-boot config, service account). Default false so a stop is always a deliberate opt-in. The control-plane readiness gate confirms Vault and SPIRE come back after the restart."
+  type        = bool
+  default     = false
+}
+
 variable "ssh_user" {
   description = "Admin username created via instance SSH-key metadata."
   type        = string
@@ -42,6 +48,12 @@ variable "ssh_user" {
 variable "ssh_public_key" {
   description = "SSH public key content for admin access."
   type        = string
+}
+
+variable "ssh_private_key_path" {
+  description = "Local path to the private key matching ssh_public_key. Used only by the control-plane readiness check to reach the instance over IAP (gcloud --ssh-key-file). Never uploaded to the instance."
+  type        = string
+  default     = "~/.ssh/viaduct_lab"
 }
 
 variable "admin_cidr" {

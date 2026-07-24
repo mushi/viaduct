@@ -1,0 +1,10 @@
+# semgrep ignore list
+
+# Vendored upstream manifest — the SPIFFE CSI *node* driver requires privileged
+# host mounts by design (it bind-mounts the SPIRE Workload API socket into pods
+# with mount propagation), so privileged / runAsNonRoot / allowPrivilegeEscalation
+# findings here are expected and not fixable without breaking the driver.
+# Ignored as a file (rather than inline nosemgrep) because it's vendored from
+# spiffe/spiffe-csi v0.2.12 and re-vendoring would wipe inline comments.
+# Reviewed 2026-07-07.
+aws/k8s/01-spiffe-csi-driver.yaml

@@ -162,8 +162,15 @@ variable "alloy_zip_sha256" {
 
 # ── SPIRE agent (multi-cloud lab) ─────────────────────────────────────────────
 # This node runs a SPIRE agent that attests (via join_token) to the SPIRE
-# server on the GCP control plane (the `gcp/` root). Leave gcp_spire_server_ip
-# empty to skip SPIRE entirely (plain Conduit/VLESS deploy).
+# server on the GCP control plane (the `gcp/` root). Set enable_spire = true to
+# turn it on; the server IP, instance name, and zone are read from the gcp/ root's
+# remote state (see main.tf), not copied into tfvars. Deploy gcp/ first.
+
+variable "enable_spire" {
+  description = "Enable the SPIRE agent on this node. When true, the agent's server address and the provisioner's IAP target are sourced from the gcp/ root's remote state, so gcp/ must be applied first. When false, all SPIRE steps are skipped."
+  type        = bool
+  default     = false
+}
 
 variable "spire_agent_version" {
   description = "SPIRE release version for the agent binary (e.g. 1.15.1)."
@@ -173,12 +180,6 @@ variable "spire_agent_version" {
 
 variable "spire_agent_sha256" {
   description = "SHA-256 of spire-<version>-linux-amd64-musl.tar.gz for the pinned spire_agent_version."
-  type        = string
-  default     = ""
-}
-
-variable "gcp_spire_server_ip" {
-  description = "Public IP of the GCP SPIRE server. Empty disables the SPIRE agent. Deploy the gcp/ root first to obtain it."
   type        = string
   default     = ""
 }
@@ -193,18 +194,6 @@ variable "gcp_ssh_user" {
   description = "SSH user on the GCP SPIRE server (the instance-metadata key user; gcloud reuses it over the IAP tunnel)."
   type        = string
   default     = "viaduct"
-}
-
-variable "gcp_instance" {
-  description = "Name of the GCP SPIRE-server instance. The provisioner mints the join token over IAP (`gcloud compute ssh --tunnel-through-iap`), targeting the instance by name/zone rather than a public :22. Must match `instance_name` in the gcp/ root. Required when gcp_spire_server_ip is set."
-  type        = string
-  default     = ""
-}
-
-variable "gcp_zone" {
-  description = "GCP zone of the SPIRE-server instance (must match the gcp/ root's zone). Used for the IAP tunnel. Required when gcp_spire_server_ip is set."
-  type        = string
-  default     = ""
 }
 
 variable "gcp_project" {

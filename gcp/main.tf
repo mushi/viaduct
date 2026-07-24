@@ -200,6 +200,11 @@ resource "google_compute_instance" "controlplane" {
   zone         = var.zone
   tags         = ["viaduct-controlplane"]
 
+  # Some in-place changes (machine_type, shielded/secure-boot config, service
+  # account) require Terraform to stop the instance. Default false so a stop is
+  # never a surprise; set true deliberately when you intend a stop-and-start.
+  allow_stopping_for_update = var.allow_stopping_for_update
+
   boot_disk {
     initialize_params {
       image = var.boot_image

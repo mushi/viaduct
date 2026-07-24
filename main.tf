@@ -95,6 +95,23 @@ resource "hcloud_firewall" "conduit" {
   }
 }
 
+# ── GCP control-plane coordinates (multi-cloud lab) ───────────────────────────
+# When SPIRE is enabled, the agent's server address and the provisioner's IAP
+# target (instance + zone) are read straight from the gcp/ root's state, so they
+# are never hand-copied into tfvars and cannot drift. Apply gcp/ first; if its
+# state is absent this read fails loudly rather than silently disabling SPIRE.
+data "terraform_remote_state" "gcp" {
+  count   = var.enable_spire ? 1 : 0
+  backend = "local"
+  config  = { path = "${path.module}/gcp/terraform.tfstate" }
+}
+
+locals {
+  spire_server_ip = var.enable_spire ? data.terraform_remote_state.gcp[0].outputs.instance_external_ip : ""
+  spire_instance  = var.enable_spire ? data.terraform_remote_state.gcp[0].outputs.instance_name : ""
+  spire_zone      = var.enable_spire ? data.terraform_remote_state.gcp[0].outputs.zone : ""
+}
+
 # ── cloud-init (gzip-compressed) ──────────────────────────────────────────────
 # The rendered cloud-config exceeds Hetzner's 32 KiB user_data limit, so we
 # gzip it. Hetzner only accepts UTF-8 user_data, so gzip must be base64-wrapped
@@ -124,7 +141,7 @@ data "cloudinit_config" "conduit" {
       alloy_zip_sha256      = var.alloy_zip_sha256
       spire_agent_version   = var.spire_agent_version
       spire_agent_sha256    = var.spire_agent_sha256
-      gcp_spire_server_ip   = var.gcp_spire_server_ip
+      gcp_spire_server_ip   = local.spire_server_ip
       trust_domain          = var.trust_domain
       ssh_public_key        = var.ssh_public_key
       ops_ssh_public_key    = var.ops_ssh_public_key
@@ -225,15 +242,22 @@ resource "null_resource" "provision" {
 
       # SPIRE agent: provisioner fetches the trust bundle + a join token from
       # the GCP SPIRE server. GCP must be deployed (SPIRE server running) first.
-      GCP_SERVER_IP    = var.gcp_spire_server_ip
+      GCP_SERVER_IP    = local.spire_server_ip
       GCP_SSH_KEY_PATH = var.gcp_ssh_key_path
       GCP_SSH_USER     = var.gcp_ssh_user
-      GCP_INSTANCE     = var.gcp_instance
-      GCP_ZONE         = var.gcp_zone
+      GCP_INSTANCE     = local.spire_instance
+      GCP_ZONE         = local.spire_zone
       GCP_PROJECT      = var.gcp_project
       TRUST_DOMAIN     = var.trust_domain
     }
   }
 
   depends_on = [hcloud_server.conduit]
+
+  lifecycle {
+    precondition {
+      condition     = !var.enable_spire || local.spire_server_ip != ""
+      error_message = "enable_spire is true but no GCP SPIRE server IP was found. Apply the gcp/ root first; its state supplies the IP, instance name, and zone."
+    }
+  }
 }
