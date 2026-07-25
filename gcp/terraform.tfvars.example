@@ -23,7 +23,8 @@ spire_approle_role_id = "<vault approle role_id>"
 trust_domain          = "viaduct.gcp"
 
 # Vault snapshot job AppRole role_id (non-secret).
-snapshot_approle_role_id = "<vault approle role_id>"
+snapshot_approle_role_id     = "<vault approle role_id>"
+aws_certrole_approle_role_id = "<vault approle role_id>"
 
 # AWS SPIRE server IP for federation (federates_with viaduct.aws); empty = standalone
 aws_spire_ip = "203.0.113.20"

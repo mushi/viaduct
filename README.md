@@ -165,9 +165,11 @@ first** — the other nodes authenticate to its Vault/SPIRE; then Hetzner and AW
    seed `kv/aws/grafana`.
 7. **Complete federation.** Set `aws_spire_ip` and `federation_cidrs` in
    `gcp/terraform.tfvars`, then `cd gcp && terraform apply` to open `:8443` and emit the
-   federation block (AWS already federates toward GCP from step 5). Then bootstrap the
-   trust bundle on the GCP box (initial TOFU — the AWS side imports GCP's automatically via
-   `crosscloud-bootstrap`, but GCP's import of the AWS bundle is manual):
+   federation block (AWS already federates toward GCP from step 5). Both directions of
+   bundle import are automatic: the AWS side imports GCP's via `crosscloud-bootstrap`,
+   and `aws/federation-sync.tf` re-pushes the AWS bundle to the GCP box over IAP whenever
+   the AWS node is (re)built (a rebuild mints a fresh `viaduct.aws` CA). Manual fallback,
+   run on the GCP box, if you ever need it:
    `curl -sk https://<aws-ip>:8443 | sudo spire-server bundle set -format spiffe -id spiffe://viaduct.aws`
 8. **Verify.** SVIDs issuing (`spire-server entry show`), Vault Agent rendering secrets,
    metrics arriving in Grafana Cloud (all three `node` labels).

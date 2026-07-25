@@ -248,6 +248,8 @@ resource "google_compute_instance" "controlplane" {
     spire-sha256          = var.spire_sha256
     spire-approle-role-id = var.spire_approle_role_id
     trust-domain          = var.trust_domain
+
+    aws-certrole-approle-role-id = var.aws_certrole_approle_role_id
     aws-spire-ip          = var.aws_spire_ip
 
     snapshot-approle-role-id = var.snapshot_approle_role_id

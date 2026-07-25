@@ -83,6 +83,29 @@ variable "gcp_control_plane_ip" {
   default     = ""
 }
 
+# ── GCP access for federation bundle sync (over IAP) ──────────────────────────
+# Used only by the federation-sync null_resource to push this node's trust bundle
+# to the GCP SPIRE server after a rebuild. Instance name + zone come from the gcp/
+# root's remote state; these are the local key and user for the IAP tunnel.
+
+variable "gcp_ssh_user" {
+  description = "SSH user on the GCP control-plane instance (its metadata key user); gcloud reuses it over the IAP tunnel."
+  type        = string
+  default     = "viaduct"
+}
+
+variable "gcp_ssh_key_path" {
+  description = "Local path to the private key matching the GCP instance-metadata key. Used only by the federation bundle sync to reach GCP over IAP. Never uploaded."
+  type        = string
+  default     = "~/.ssh/viaduct_lab"
+}
+
+variable "gcp_project" {
+  description = "GCP project ID for the IAP tunnel. Empty uses gcloud's active project."
+  type        = string
+  default     = ""
+}
+
 variable "gcp_vault_fingerprint" {
   description = "SHA-256 fingerprint of GCP Vault's self-signed listener cert (colon-hex, e.g. AA:BB:...), pinned to verify the TOFU-fetched vault.crt. From: openssl x509 -in /opt/vault/tls/vault.crt -noout -fingerprint -sha256 on the GCP box."
   type        = string

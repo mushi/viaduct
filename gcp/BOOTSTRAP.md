@@ -72,13 +72,23 @@ vault write auth/approle/role/snapshot-saver \
   token_policies=snapshot token_period=20m \
   secret_id_bound_cidrs=127.0.0.1/32 token_bound_cidrs=127.0.0.1/32
 
+# AWS cert-role refresh — may update only the aws-vault-agent cert role, to re-pin
+# the viaduct.aws CA after an AWS rebuild. Short TTL; used one-shot per refresh.
+vault policy write aws-certrole-refresh - <<'EOF'
+path "auth/cert/certs/aws-vault-agent" { capabilities = ["create", "update"] }
+EOF
+vault write auth/approle/role/aws-certrole-refresh \
+  token_policies=aws-certrole-refresh token_ttl=5m token_max_ttl=30m \
+  secret_id_bound_cidrs=127.0.0.1/32 token_bound_cidrs=127.0.0.1/32
+
 # role-ids → back into Terraform; secret-ids → onto disk (this boot only)
-vault read -field=role_id auth/approle/role/spire-server/role-id      # -> tfvars spire_approle_role_id
-vault read -field=role_id auth/approle/role/snapshot-saver/role-id    # -> tfvars snapshot_approle_role_id
+vault read -field=role_id auth/approle/role/spire-server/role-id        # -> tfvars spire_approle_role_id
+vault read -field=role_id auth/approle/role/snapshot-saver/role-id      # -> tfvars snapshot_approle_role_id
+vault read -field=role_id auth/approle/role/aws-certrole-refresh/role-id # -> tfvars aws_certrole_approle_role_id
 ```
 
-Put the two **role-ids** in `gcp/terraform.tfvars` (`spire_approle_role_id`,
-`snapshot_approle_role_id`) and `terraform apply` again so they reach instance metadata.
+Put the three **role-ids** in `gcp/terraform.tfvars` (`spire_approle_role_id`,
+`snapshot_approle_role_id`, `aws_certrole_approle_role_id`) and `terraform apply` again so they reach instance metadata.
 Then mint and place the **secret-ids** (these live only on the host, not in Terraform):
 
 ```sh
@@ -91,6 +101,11 @@ echo "VAULT_APPROLE_SECRET_ID=$SID" | sudo tee /opt/spire/conf/server/spire.env 
 vault write -f -field=secret_id auth/approle/role/snapshot-saver/secret-id \
   | sudo tee /opt/vault-snapshot/secret-id > /dev/null
 sudo chmod 0600 /opt/vault-snapshot/secret-id
+
+# aws-certrole-refresh secret-id -> /opt/vault-certrole/secret-id (raw value, 0600 root)
+vault write -f -field=secret_id auth/approle/role/aws-certrole-refresh/secret-id \
+  | sudo tee /opt/vault-certrole/secret-id > /dev/null
+sudo chmod 0600 /opt/vault-certrole/secret-id
 unset SID
 ```
 
@@ -141,7 +156,7 @@ vault kv put kv/hetzner/cloudflare api_token='<cloudflare_zone_dns_edit_token>'
 
 # spire-server was already restarted by the startup re-run in §4; confirm it's healthy
 sudo /usr/local/bin/spire-server healthcheck
-sudo systemctl start vault-snapshot.service   # verify the first snapshot lands in GCS
+sudo systemctl start vault-snapshot.service   # verify the first snapshot arrives in GCS
 ```
 
 ## 7. Operator admin via GCP auth, then revoke the root token
@@ -179,6 +194,7 @@ Test from a **fresh shell** (don't lean on the cached root token), and confirm t
 token can do real work **before** revoking root:
 
 ```sh
+export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true
 vault login -method=gcp role=admin type=gce
 vault policy list && vault secrets list && vault auth list
 ```

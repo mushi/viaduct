@@ -260,3 +260,35 @@ EOF
 
 systemctl daemon-reload
 systemctl enable --now vault-snapshot.timer
+
+# ── 7b. AWS cert-role refresh ────────────────────────────────────────────────
+# Refreshes the Vault aws-vault-agent cert role with the current viaduct.aws CA
+# from the federated bundle store. Invoked by aws/'s federation sync over IAP
+# after an AWS rebuild (a fresh datastore mints a new CA, so the pinned CA in the
+# role goes stale and AWS workloads can no longer authenticate). Auths with a
+# scoped AppRole that may only update this one cert path; secret-id placed
+# out-of-band like the others. Also usable on a timer for the 168h rotation case.
+mkdir -p /opt/vault-certrole
+chmod 0700 /opt/vault-certrole
+
+cat > /usr/local/bin/refresh-aws-certrole.sh <<'CERTROLE'
+#!/usr/bin/env bash
+set -euo pipefail
+md() { curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/$1"; }
+export VAULT_ADDR="https://127.0.0.1:8200" VAULT_CACERT="/opt/vault/tls/vault.crt"
+TD="${1:-viaduct.aws}"
+ROLE_ID="$(md instance/attributes/aws-certrole-approle-role-id)"
+SECRET_ID="$(cat /opt/vault-certrole/secret-id)"
+
+ca="$(mktemp)"; trap 'rm -f "$ca"' EXIT
+spire-server bundle list -id "spiffe://${TD}" -format pem > "$ca"
+[ -s "$ca" ] || { echo "ERROR: empty ${TD} bundle in the SPIRE store" >&2; exit 1; }
+
+VAULT_TOKEN="$(vault write -field=token auth/approle/login role_id="$ROLE_ID" secret_id="$SECRET_ID")"
+export VAULT_TOKEN
+vault write auth/cert/certs/aws-vault-agent \
+  certificate=@"$ca" display_name=aws-vault-agent policies=aws-workload \
+  allowed_uri_sans="spiffe://${TD}/vault-agent" token_ttl=20m token_max_ttl=1h
+echo "OK: aws-vault-agent cert role refreshed with the current ${TD} CA"
+CERTROLE
+chmod 0755 /usr/local/bin/refresh-aws-certrole.sh

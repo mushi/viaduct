@@ -119,14 +119,15 @@ resource "aws_iam_role" "spire" {
 }
 
 # aws_kms KeyManager: SPIRE manages its own keys (created on first run, keyed by
-# alias). Resource "*" because the key IDs are created dynamically by SPIRE; the
-# actions are the documented aws_kms plugin set, MINUS kms:ScheduleKeyDeletion /
-# kms:CancelKeyDeletion — a runtime box has no reason to destroy KMS keys, and
-# withholding it stops a compromised instance from deleting the CA signing key.
-# Trade-off: on rotation SPIRE can't dispose superseded keys, so they linger
-# (~$1/mo each) until cleaned up at teardown.
-# Stronger follow-up (test via -replace first): scope the remaining per-key
-# actions by the tag SPIRE applies to its keys, instead of Resource "*".
+# alias). Resource "*" because the key IDs are created dynamically by SPIRE.
+# kms:ScheduleKeyDeletion IS granted so SPIRE auto-prunes superseded keys on
+# rotation (SPIRE rotates often; otherwise they linger at ~$1/mo each). It is the
+# only destructive action SPIRE's prune needs. kms:CancelKeyDeletion stays
+# withheld: SPIRE never needs it, and withholding it means a compromised box can
+# at worst schedule a deletion, which KMS holds in a 7-30 day pending window that
+# only the operator identity can cancel. Stronger follow-up (test via -replace
+# first): condition ScheduleKeyDeletion on the tag SPIRE applies to its keys, so
+# it can delete only its own keys, instead of Resource "*".
 resource "aws_iam_role_policy" "kms" {
   name = "spire-aws-kms"
   role = aws_iam_role.spire.id
@@ -145,6 +146,7 @@ resource "aws_iam_role_policy" "kms" {
         "kms:UpdateAlias",
         "kms:DeleteAlias",
         "kms:Sign",
+        "kms:ScheduleKeyDeletion",
         "kms:TagResource"
       ]
       Resource = "*"
@@ -239,8 +241,11 @@ resource "aws_instance" "spire" {
     guardrail_script      = file("${path.module}/scripts/egress-guardrail.sh")
     crosscloud_script     = file("${path.module}/scripts/crosscloud-bootstrap.sh")
   }))
-  # Changing user_data relaunches the instance — fine here: the SPIRE root CA is in
-  # KMS (durable), so a rebuild re-attaches to it. NOT applied during the bake.
+  # Changing user_data relaunches the instance. Acceptable here, but note what
+  # actually survives: the CA private keys persist in KMS, yet the CA journal lives
+  # in the ephemeral sqlite datastore, so a rebuild mints a FRESH viaduct.aws CA
+  # and the trust bundle changes (the old KMS keys orphan and auto-prune). The
+  # federation-sync null_resource re-pushes the new bundle to GCP.
   user_data_replace_on_change = true
 
   # IMDSv2 required (token-based) — aws_iid fetches the identity document here.

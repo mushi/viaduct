@@ -114,3 +114,9 @@ variable "snapshot_approle_role_id" {
   description = "Vault AppRole role_id for the weekly snapshot job (non-secret). The secret_id is placed out-of-band in /opt/vault-snapshot/secret-id (0600) on the node."
   type        = string
 }
+
+variable "aws_certrole_approle_role_id" {
+  description = "Vault AppRole role_id (non-secret) for refreshing the aws-vault-agent cert role after an AWS rebuild. Scoped to update only auth/cert/certs/aws-vault-agent. The secret_id is placed out-of-band in /opt/vault-certrole/secret-id (0600). Empty until the AppRole is created in BOOTSTRAP."
+  type        = string
+  default     = ""
+}
