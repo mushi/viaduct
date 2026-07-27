@@ -120,3 +120,17 @@ variable "aws_certrole_approle_role_id" {
   type        = string
   default     = ""
 }
+
+# ── WireGuard private mesh (this node is the hub) ─────────────────────────────
+
+variable "wg_port" {
+  description = "WireGuard hub UDP listen port on the GCP node (the single public mesh port)."
+  type        = number
+  default     = 51820
+}
+
+variable "wg_ingress_cidrs" {
+  description = "IPv4 CIDRs allowed to reach the WireGuard hub port. Default open: WireGuard silently drops any non-peer packet, so the crypto is the real gate. Tighten to the spoke public IPs (Hetzner /32, AWS EIP /32, your laptop /32) if you want an extra IP filter, accepting the IP-churn maintenance. IPv4 only: the hub endpoint is IPv4, and a GCP firewall rule cannot mix v4 and v6 source ranges."
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}

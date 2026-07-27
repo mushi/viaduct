@@ -50,6 +50,26 @@ resource "google_compute_firewall" "iap_ssh" {
 
 # Vault (8200) + SPIRE server (8081), restricted to the agent node IPs.
 # Created only once agent_cidrs is non-empty (AWS + Hetzner IPs known).
+# WireGuard hub: the single public UDP port for the private mesh overlay. The GCP
+# node is the hub; Hetzner, AWS, and the admin laptop dial in. WireGuard silently
+# drops any packet not signed by a configured peer, so 0.0.0.0/0 is a safe default
+# (the crypto is the gate); tighten wg_ingress_cidrs to the spoke IPs if you prefer,
+# accepting the IP-churn maintenance. Phase 1 opens this; the control-plane rules
+# below move behind the mesh in Phase 2.
+resource "google_compute_firewall" "wireguard" {
+  name      = "viaduct-allow-wireguard"
+  network   = google_compute_network.viaduct.name
+  direction = "INGRESS"
+
+  allow {
+    protocol = "udp"
+    ports    = [tostring(var.wg_port)]
+  }
+
+  source_ranges = var.wg_ingress_cidrs
+  target_tags   = ["viaduct-controlplane"]
+}
+
 resource "google_compute_firewall" "controlplane" {
   count     = length(var.agent_cidrs) > 0 ? 1 : 0
   name      = "viaduct-allow-controlplane"
@@ -250,6 +270,7 @@ resource "google_compute_instance" "controlplane" {
     trust-domain          = var.trust_domain
 
     aws-certrole-approle-role-id = var.aws_certrole_approle_role_id
+    wg-port                      = tostring(var.wg_port)
     aws-spire-ip          = var.aws_spire_ip
 
     snapshot-approle-role-id = var.snapshot_approle_role_id

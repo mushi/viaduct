@@ -1,93 +1,40 @@
-# Vault restore from snapshot after an instance rebuild
+# Control-plane recovery after an instance rebuild
 
-The control-plane boot disk is ephemeral: a rebuilt instance starts with an empty
-Vault Raft store. Restore from the latest GCS snapshot.
+Recovery is **automatic**. `terraform apply -replace=google_compute_instance.controlplane`
+recreates the control-plane instance; `startup.sh` restores Vault and SPIRE from the latest
+GCS backup on first boot, and the readiness gate holds the apply until Vault is unsealed and
+the SPIRE server is active. No manual steps.
 
-This works because the KMS unseal key and the snapshot bucket are durable
-(`prevent_destroy`), so the snapshot decrypts and Vault auto-unseals.
+## How it works
 
-Snapshots are weekly (`vault-snapshot.timer`), fixed key `gs://<bucket>/vault.snap`,
-last 3 versions retained.
+Durable across a rebuild (`prevent_destroy` in `main.tf`): the GCP KMS unseal key and the
+snapshot bucket. The boot disk is disposable.
 
-## Steps
+1. **Fresh backup before teardown.** `null_resource.prereplace_backup` (a destroy-time
+   provisioner in `backup.tf`) runs `vault-snapshot.service` on the old instance while it is
+   still alive, so `vault.snap` and `spire-data.tar.gz` in the bucket hold the latest state.
+2. **Restore on first boot** (`startup.sh` §6a, when Vault is uninitialised and a backup is
+   present): init a temporary root token, then `vault operator raft snapshot restore -force`
+   of `vault.snap` (KMS re-unseals the restored data); log in with the box's own GCE identity
+   (the `restore-agent` gcp-auth role, itself restored in the snapshot) to regenerate the
+   AppRole `secret-id`s that lived on the ephemeral disk; extract `spire-data.tar.gz` into
+   `/opt/spire/data/server` (datastore + `keys.json`).
 
-1. Rebuild the instance:
-   ```sh
-   terraform apply -replace=google_compute_instance.controlplane
-   ```
-   Vault comes up auto-unsealed but **uninitialised**.
+Vault's PKI root and the SPIRE datastore both return, so the rebuilt SPIRE server keeps the
+**same** trust-domain CA: agents keep trusting it and federation stays intact, with no
+re-attestation.
 
-2. Connect over IAP (`gcloud compute ssh viaduct-controlplane --tunnel-through-iap`), then:
-   ```sh
-   export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true
-   ```
+## Backups
 
-3. Initialise the fresh cluster for a temporary root token (discarded in step 6):
-   ```sh
-   vault operator init     # keep the temp root token for step 5 only
-   ```
+`vault-snapshot.service` writes `vault.snap` (Vault Raft) and `spire-data.tar.gz` (a
+transaction-consistent SPIRE datastore copy plus `keys.json`) to the bucket. It runs weekly
+on `vault-snapshot.timer` and once more, on demand, just before every replace (step 1). The
+bucket keeps the last 3 versions of each object.
 
-4. Download the latest snapshot:
-   ```sh
-   gcloud storage cp gs://<bucket>/vault.snap /tmp/vault.snap
-   ```
+## Break-glass (manual restore)
 
-5. Restore (force), using the temp root token:
-   ```sh
-   read -rsp 'temp root token: ' VAULT_TOKEN; export VAULT_TOKEN; echo   # off the command line / history
-   vault operator raft snapshot restore -force /tmp/vault.snap
-   rm -f /tmp/vault.snap
-   ```
-
-6. Vault now holds the restored data. Authenticate with your **original** root
-   token / recovery keys from the safe place where you stored them — the temp init token from step 3 is
-   invalidated by the restore.
-
-7. Re-place the AppRole secret_ids (the on-disk files were on the ephemeral disk;
-   the roles/policies/PKI themselves came back with the snapshot). With the
-   original root token:
-   ```sh
-   # SPIRE
-   vault write -f -field=secret_id auth/approle/role/spire-server/secret-id
-   #  -> /opt/spire/conf/server/spire.env  as  VAULT_APPROLE_SECRET_ID=<value>  (0600 spire)
-   # Snapshot job
-   vault write -f -field=secret_id auth/approle/role/snapshot-saver/secret-id
-   #  -> /opt/vault-snapshot/secret-id      (raw value, 0600 root)
-   ```
-
-8. Restart consumers:
-   ```sh
-   sudo systemctl restart spire-server
-   ```
-
-## Note
-The PKI root CA private key (in Vault) is the critical durable asset. Because the snapshot
-restores it, the rebuilt SPIRE server's new intermediate chains to the **same** root — so
-agents keep trusting the trust domain and don't need a new CA bundle.
-
-## SPIRE state after a rebuild
-The Vault snapshot does **not** contain SPIRE server state. SPIRE's datastore
-(`/opt/spire/data/server/datastore.sqlite3` — registration entries + federated bundles) and
-its KeyManager keys (`keys.json`) live on the **ephemeral boot disk** and are lost on a
-rebuild. After the Vault restore above, also:
-
-1. **Re-import the AWS federated bundle** (TOFU, as in first-time federation). GCP's own
-   bundle is unchanged (same root), so the AWS side needs nothing:
-   ```sh
-   curl -sk https://<aws-ip>:8443 | sudo spire-server bundle set -format spiffe -id spiffe://viaduct.aws
-   ```
-2. **Recreate registration entries**, e.g. the Hetzner workload:
-   ```sh
-   sudo spire-server entry create \
-     -parentID spiffe://viaduct.gcp/hetzner \
-     -spiffeID spiffe://viaduct.gcp/hetzner/vault-agent \
-     -selector unix:uid:994 -dns vault-agent.hetzner
-   ```
-3. **Re-attest the Hetzner agent** — its `join_token` is single-use and its server-side
-   record is gone. Issue a fresh token and restart `spire-agent` on Hetzner:
-   ```sh
-   sudo spire-server token generate -spiffeID spiffe://viaduct.gcp/hetzner
-   ```
-
-For a lab this manual recovery is fine; to avoid it, put `/opt/spire/data` on a persistent
-disk or back the datastore up alongside the Vault snapshot.
+Only if the automatic restore fails. Reach the box over IAP
+(`gcloud compute ssh viaduct-controlplane --tunnel-through-iap`) and run the same sequence as
+`startup.sh` §6a, authenticating after the restore with your **offline** recovery keys (the
+temporary init token is invalidated by the restore). Do not run `vault operator init` and
+stop there: that forks a new empty Vault instead of restoring.

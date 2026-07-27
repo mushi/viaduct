@@ -94,7 +94,7 @@ e2-micro is *always*-free (indefinite), and every other line is billed in both p
 | Hetzner CX23 | ~4.3 | ~4.3 | €4; the always-on station, incl. 20 TB egress                                                                            |
 | GCP e2-micro compute | 0 | 0 | always-free tier (us-central1), indefinite                                                                               |
 | GCP external IPv4 | ~3.6 | ~3.6 | billed even on free-tier VMs                                                                                             |
-| GCP KMS + GCS snapshots | ~0.1 | ~0.1 | unseal key + small weekly Raft snapshots                                                                                 |
+| GCP KMS + GCS snapshots | ~0.1 | ~0.1 | unseal key + small Vault + SPIRE snapshots                                                                                 |
 | AWS t4g.small compute | 0 | ~13 | **free trial → 2026-12-31**, then on-demand 24/7                                                                         |
 | AWS EIP (public IPv4) | ~3.6 | ~3.6 | billed in-use                                                                                                            |
 | AWS EBS gp3 root | ~1.8 | ~1.8 | ~30 GB, encrypted                                                                                                        |
@@ -189,11 +189,15 @@ apply does depends on the change:
 **A plain `terraform apply` never rebuilds the Hetzner server.** `user_data` (cloud-init) is
 under `ignore_changes`, so a plain apply silently skips cloud-init edits, `enable_spire`
 included. Use `-replace=hcloud_server.conduit` whenever the running instance must be
-replaced to pick up a first-boot change. For a full GCP instance replacement, see the
-[recovery runbook](gcp/RESTORE.md) (Vault must be restored from a snapshot).
+replaced to pick up a first-boot change. To rebuild the GCP control plane,
+`terraform apply -replace=google_compute_instance.controlplane`; Vault and SPIRE restore
+automatically (see [Recovery](#recovery)).
 
-### Recovery 
-See [Recovery runbook](gcp/RESTORE.md)
+### Recovery
+
+Rebuilding the GCP control plane restores Vault and SPIRE automatically from the latest GCS
+backup, with a fresh backup taken just before the old instance is destroyed. No manual
+steps; see [gcp/RESTORE.md](gcp/RESTORE.md).
 
 ### Teardown
 

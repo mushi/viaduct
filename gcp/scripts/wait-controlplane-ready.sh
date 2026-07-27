@@ -23,6 +23,11 @@ command -v jq     >/dev/null || { echo "ERROR: jq not found; required to parse V
 GCP_KEY="${GCP_SSH_KEY_PATH/#\~/$HOME}"
 TIMEOUT="${TIMEOUT:-600}"   # seconds; generous for first-boot cloud-init
 INTERVAL="${INTERVAL:-10}"
+# A rebuild auto-initialises Vault via the startup-script restore within a few
+# minutes, so a brief uninitialised window is transient. Only after Vault stays
+# uninitialised for this long do we treat it as a genuine first-ever deploy that
+# needs a manual `vault operator init`.
+FIRST_DEPLOY_GRACE="${FIRST_DEPLOY_GRACE:-300}"
 
 # One IAP SSH per poll: emit the SPIRE unit state, then Vault's status JSON.
 # Single-quoted --command so the $(...) runs on the instance, not locally.
@@ -39,6 +44,7 @@ probe() {
 echo "Waiting for GCP control plane (Vault unsealed + SPIRE server active); timeout ${TIMEOUT}s..."
 deadline=$(( $(date +%s) + TIMEOUT ))
 last=""
+uninit_since=""
 while [ "$(date +%s)" -lt "$deadline" ]; do
   out="$(probe || true)"
   spire="$(printf '%s\n' "$out" | sed -n 's/^SPIRE=//p' | head -1)"
@@ -51,17 +57,30 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   case "$initialized" in ""|null) initialized="unknown" ;; esac
   case "$sealed" in ""|null) sealed="unknown" ;; esac
 
-  if [ "$initialized" = "false" ]; then
-    echo
-    echo "Vault is up but NOT initialised. Run 'vault operator init' on the control plane,"
-    echo "then re-run this apply to confirm readiness."
-    exit 0
-  fi
-
+  # Readiness always wins, even after passing through a transient uninit window.
   if [ "$spire" = "active" ] && [ "$sealed" = "false" ] && [ "$initialized" = "true" ]; then
     echo
     echo "GCP control plane ready: Vault unsealed, SPIRE server active."
     exit 0
+  fi
+
+  # Vault reachable but uninitialised. On a rebuild the restore auto-initialises
+  # shortly, so keep waiting; only conclude "first deploy, needs manual init" if
+  # it persists past the grace period. Running `vault operator init` during a
+  # rebuild would fork a NEW Vault instead of restoring, so we never advise it
+  # while a restore might still be in progress.
+  if [ "$initialized" = "false" ]; then
+    now="$(date +%s)"
+    [ -z "$uninit_since" ] && uninit_since="$now"
+    if [ $(( now - uninit_since )) -ge "$FIRST_DEPLOY_GRACE" ]; then
+      echo
+      echo "Vault is up but still uninitialised after ${FIRST_DEPLOY_GRACE}s (no restore took"
+      echo "effect). If this is a first-ever deploy, run 'vault operator init' on the control"
+      echo "plane, then re-run this apply. Do NOT run init during a rebuild."
+      exit 0
+    fi
+  else
+    uninit_since=""
   fi
 
   status="spire=${spire:-unreachable} vault_initialized=${initialized} vault_sealed=${sealed}"

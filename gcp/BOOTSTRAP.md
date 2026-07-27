@@ -188,6 +188,24 @@ vault write auth/gcp/role/admin type=gce \
   bound_zones=<zone> \
   bound_service_accounts=<controlplane-sa-email> \
   policies=admin token_ttl=20m token_max_ttl=2h
+
+# Restore agent: on a rebuild, startup.sh restores the Vault snapshot (which
+# brings back the roles/policies) and then must regenerate the AppRole
+# secret-ids, since those files lived on the ephemeral disk. It logs in with the
+# box's own GCE identity — no bootstrap secret — scoped to create ONLY those
+# three secret-ids and nothing else. (The temp root token from the fresh init is
+# invalidated by the restore, so a post-restore login is required; this role is
+# itself part of the restored data, so it exists by the time the script uses it.)
+vault policy write restore-secret-ids - <<'EOF'
+path "auth/approle/role/spire-server/secret-id"         { capabilities = ["create", "update"] }
+path "auth/approle/role/snapshot-saver/secret-id"       { capabilities = ["create", "update"] }
+path "auth/approle/role/aws-certrole-refresh/secret-id" { capabilities = ["create", "update"] }
+EOF
+vault write auth/gcp/role/restore-agent type=gce \
+  project_id=<project-id> \
+  bound_zones=<zone> \
+  bound_service_accounts=<controlplane-sa-email> \
+  policies=restore-secret-ids token_ttl=5m token_max_ttl=10m
 ```
 
 Test from a **fresh shell** (don't lean on the cached root token), and confirm the admin

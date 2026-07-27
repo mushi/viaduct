@@ -8,7 +8,7 @@ ssh_private_key_path = "~/.ssh/id_ed25519"
 ops_ssh_public_key   = "ssh-ed25519 AAAA... your-ops-key-here"   # separate keypair for the interactive `ops` user
 
 # Required — no default (fails closed). Restrict SSH to your own IP /32.
-# Find it at https://ifconfig.me, then set it here or export
+# Find it awith curl ifconfig.me/ip, then set it here or export
 # TF_VAR_admin_cidr='["203.0.113.10/32"]'
 # admin_cidr = ["203.0.113.10/32"]
 

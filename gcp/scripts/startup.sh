@@ -10,6 +10,12 @@
 # (e.g. a password manager). Vault auto-unseals via KMS thereafter.
 set -euo pipefail
 
+# The Google Cloud CLI ships as a snap at /snap/bin/gcloud, which is NOT on the
+# non-interactive startup-script PATH (systemd default: /usr/sbin:/usr/bin:...).
+# Without this, every `gcloud` call here (snapshot restore below, backup job)
+# fails with "command not found" and is silently swallowed inside `if` guards.
+export PATH="/snap/bin:$PATH"
+
 md() { curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/$1"; }
 
 REGION="$(md instance/attributes/region)"
@@ -111,6 +117,73 @@ fi
 id spire >/dev/null 2>&1 || useradd --system --home-dir /opt/spire --shell /usr/sbin/nologin spire
 mkdir -p /opt/spire/conf/server /opt/spire/data/server
 
+# ── 6a. Restore from backup on a rebuilt instance ─────────────────────────────
+# A rebuilt node starts with an empty Vault Raft store and empty SPIRE data. If a
+# backup exists in GCS, restore both so the control plane comes back whole with no
+# manual runbook. Guard: only when Vault is uninitialised (a fresh instance) AND a
+# backup is present, so a normal reboot (data intact on the persistent boot disk)
+# and the first-ever deploy (no backup yet) are both left untouched.
+command -v jq >/dev/null || apt-get install -y jq
+# Loopback to the co-located Vault. The self-signed listener cert lists 127.0.0.1
+# in its SANs, so CACERT verification succeeds (same cert the agents trust).
+export VAULT_ADDR="https://127.0.0.1:8200" VAULT_CACERT="/opt/vault/tls/vault.crt"
+BUCKET="$(md instance/attributes/snapshot-bucket)"
+
+# Wait for Vault's listener to actually answer. `vault status` exits non-zero
+# while sealed/uninitialised, so we cannot gate on its exit code; instead break
+# as soon as -format=json returns non-empty output (listener up), up to ~120s.
+# Without this the gate can read an empty status on a slow boot and skip the
+# restore, leaving the node fresh and uninitialised.
+VS_JSON=""
+for _ in $(seq 1 60); do
+  VS_JSON="$(vault status -format=json 2>/dev/null || true)"
+  [ -n "$VS_JSON" ] && break
+  sleep 2
+done
+# NB: use has()/tostring, not `.initialized // "unknown"` — jq's `//` treats a
+# boolean false as "no value", so `false // "unknown"` yields "unknown", and a
+# freshly rebuilt Vault is always initialized=false. That bug skipped the restore
+# on every boot.
+VAULT_INITIALISED="$(printf '%s' "$VS_JSON" | jq -r 'if has("initialized") then (.initialized | tostring) else "unknown" end' 2>/dev/null || echo unknown)"
+echo "restore-gate: vault initialised=${VAULT_INITIALISED}, bucket=${BUCKET}"
+
+if [ "$VAULT_INITIALISED" = "false" ] && gcloud storage ls "gs://$BUCKET/vault.snap" >/dev/null 2>&1; then
+  echo "Rebuilt instance with a backup present — restoring Vault + SPIRE."
+
+  # Vault: init a fresh cluster for a temporary root token, then restore the
+  # snapshot (which invalidates that token). KMS auto-unseal re-applies to the
+  # restored data. Mirrors RESTORE.md.
+  TMP_ROOT="$(vault operator init -format=json | jq -r '.root_token')"
+  gcloud storage cp "gs://$BUCKET/vault.snap" /tmp/vault.snap
+  VAULT_TOKEN="$TMP_ROOT" vault operator raft snapshot restore -force /tmp/vault.snap
+  rm -f /tmp/vault.snap
+
+  # Regenerate the AppRole secret-ids (they lived on the ephemeral disk) with the
+  # scoped restore-agent gcp-auth role, which came back in the snapshot. Login is
+  # by the box's own GCE identity, no bootstrap secret.
+  mkdir -p /opt/vault-snapshot /opt/vault-certrole
+  chmod 0700 /opt/vault-snapshot /opt/vault-certrole
+  # vault CLI requires flags (-method, -token-only) BEFORE positional key=value
+  # args (role=, type=); -token-only after them is rejected as a bad key/value pair.
+  VAULT_TOKEN="$(vault login -method=gcp -token-only role=restore-agent type=gce)"
+  export VAULT_TOKEN
+  SID="$(vault write -f -field=secret_id auth/approle/role/spire-server/secret-id)"
+  install -o spire -g spire -m 0600 /dev/null /opt/spire/conf/server/spire.env
+  echo "VAULT_APPROLE_SECRET_ID=$SID" > /opt/spire/conf/server/spire.env
+  vault write -f -field=secret_id auth/approle/role/snapshot-saver/secret-id > /opt/vault-snapshot/secret-id
+  vault write -f -field=secret_id auth/approle/role/aws-certrole-refresh/secret-id > /opt/vault-certrole/secret-id
+  chmod 0600 /opt/vault-snapshot/secret-id /opt/vault-certrole/secret-id
+  unset VAULT_TOKEN SID
+
+  # SPIRE: restore the datastore + keys so the CA and registration/federation
+  # state are unchanged (no re-attestation). Ownership is fixed by §6's chown.
+  if gcloud storage ls "gs://$BUCKET/spire-data.tar.gz" >/dev/null 2>&1; then
+    gcloud storage cp "gs://$BUCKET/spire-data.tar.gz" /tmp/spire-data.tar.gz
+    tar -C /opt/spire/data/server -xzf /tmp/spire-data.tar.gz
+    rm -f /tmp/spire-data.tar.gz
+  fi
+fi
+
 # Public Vault CA cert, readable by spire (UpstreamAuthority TLS verification).
 install -m 0644 /opt/vault/tls/vault.crt /opt/spire/conf/server/vault-ca.crt
 
@@ -126,6 +199,7 @@ if [ -n "$AWS_SPIRE_IP" ]; then
     bundle_endpoint {
       address = "0.0.0.0"
       port    = 8443
+      profile "https_spiffe" {}
     }
     federates_with "viaduct.aws" {
       bundle_endpoint_url = "https://${AWS_SPIRE_IP}:8443"
@@ -222,6 +296,7 @@ chmod 0700 /opt/vault-snapshot
 cat > /usr/local/bin/vault-snapshot.sh <<'SNAP'
 #!/usr/bin/env bash
 set -euo pipefail
+export PATH="/snap/bin:$PATH"   # snap-provided gcloud, absent from systemd's default PATH
 md() { curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/$1"; }
 export VAULT_ADDR="https://127.0.0.1:8200" VAULT_CACERT="/opt/vault/tls/vault.crt"
 ROLE_ID="$(md instance/attributes/snapshot-approle-role-id)"
@@ -232,6 +307,16 @@ export VAULT_TOKEN
 vault operator raft snapshot save /tmp/vault.snap
 gcloud storage cp /tmp/vault.snap "gs://$BUCKET/vault.snap"
 rm -f /tmp/vault.snap
+
+# SPIRE server state: a transaction-consistent sqlite copy (never a raw cp of a
+# live DB) plus the disk KeyManager keys, so a rebuilt node restores the same
+# datastore and the same viaduct.gcp CA — no re-attestation, no re-federation.
+spdir="$(mktemp -d)"
+sqlite3 /opt/spire/data/server/datastore.sqlite3 ".backup '$spdir/datastore.sqlite3'"
+cp -a /opt/spire/data/server/keys.json "$spdir/keys.json"
+tar -C "$spdir" -czf "$spdir/spire-data.tar.gz" datastore.sqlite3 keys.json
+gcloud storage cp "$spdir/spire-data.tar.gz" "gs://$BUCKET/spire-data.tar.gz"
+rm -rf "$spdir"
 SNAP
 chmod 0755 /usr/local/bin/vault-snapshot.sh
 
@@ -292,3 +377,59 @@ vault write auth/cert/certs/aws-vault-agent \
 echo "OK: aws-vault-agent cert role refreshed with the current ${TD} CA"
 CERTROLE
 chmod 0755 /usr/local/bin/refresh-aws-certrole.sh
+
+# ── 8. WireGuard hub (private mesh overlay) ───────────────────────────────────
+# This node is the mesh hub: it listens on WG_PORT and Hetzner/AWS/the admin
+# laptop dial in (spokes need no inbound port). The node's private key is
+# generated once at first boot and sealed to the vTPM via systemd-creds — the
+# plaintext key only transits a pipe and never lands on disk. Peers are added
+# later by the provisioner. ip_forward lets the hub route spoke-to-spoke traffic.
+apt-get install -y wireguard-tools sqlite3
+
+# TSS userspace libraries that systemd-creds dlopens to seal the WG key to the
+# vTPM (esys, rc, mu, and the device TCTI for /dev/tpmrm0). The image ships the
+# vTPM device + kernel driver but NOT these libs, so without them
+# `systemd-creds --with-key=tpm2` fails "Operation not supported" and, under
+# `set -e`, aborts the whole startup script. The sonamed names can drift across
+# Ubuntu releases, so fall back to tpm2-tools (which depends on the right runtime)
+# rather than let a future image silently reintroduce that abort.
+apt-get install -y libtss2-esys-3.0.2-0 libtss2-rc0 libtss2-mu-4.0.1-0 libtss2-tcti-device0 \
+  || apt-get install -y tpm2-tools
+
+WG_ADDR="10.99.0.1/24"                        # hub address on the 10.99.0.0/24 mesh
+WG_PORT="$(md instance/attributes/wg-port)"
+mkdir -p /etc/wireguard && chmod 0700 /etc/wireguard
+
+# Generate + TPM-seal the private key once. tee fans the freshly-generated key to
+# `wg pubkey` (public key, non-secret) and to systemd-creds (TPM-sealed blob);
+# the raw private key is never written to disk.
+if [ ! -f /etc/wireguard/wg0.key.cred ]; then
+  ( umask 077
+    wg genkey | tee >(wg pubkey > /etc/wireguard/wg0.pub) \
+      | systemd-creds encrypt --name=wg0-privkey --with-key=tpm2 - /etc/wireguard/wg0.key.cred )
+fi
+
+# Interface only: no PrivateKey inline (injected at start from the sealed
+# credential) and no peers yet (the provisioner adds them).
+cat > /etc/wireguard/wg0.conf <<WGCONF
+[Interface]
+Address = ${WG_ADDR}
+ListenPort = ${WG_PORT}
+PostUp = wg set %i private-key "\$CREDENTIALS_DIRECTORY/wg0-privkey"
+WGCONF
+chmod 0600 /etc/wireguard/wg0.conf
+
+# Drop-in: decrypt the sealed key into the service's runtime credential store
+# (RAM, service-scoped), so PostUp can load it without it ever touching disk.
+mkdir -p /etc/systemd/system/wg-quick@wg0.service.d
+cat > /etc/systemd/system/wg-quick@wg0.service.d/10-credential.conf <<'DROPIN'
+[Service]
+LoadCredentialEncrypted=wg0-privkey:/etc/wireguard/wg0.key.cred
+DROPIN
+
+# Hub routes spoke-to-spoke traffic over the mesh.
+echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-wireguard-forward.conf
+sysctl -p /etc/sysctl.d/99-wireguard-forward.conf
+
+systemctl daemon-reload
+systemctl enable --now wg-quick@wg0
