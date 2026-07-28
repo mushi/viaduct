@@ -249,6 +249,11 @@ resource "null_resource" "provision" {
       GCP_ZONE         = local.spire_zone
       GCP_PROJECT      = var.gcp_project
       TRUST_DOMAIN     = var.trust_domain
+
+      # WireGuard mesh: this node registers with the GCP hub over IAP and dials
+      # it at GCP_SERVER_IP:WG_PORT. WG_MESH_IP is this spoke's fixed mesh address.
+      WG_PORT    = tostring(var.wg_port)
+      WG_MESH_IP = var.wg_mesh_ip
     }
   }
 

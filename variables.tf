@@ -19,6 +19,12 @@ variable "ops_ssh_public_key" {
   type        = string
 }
 
+variable "ops_ssh_key_path" {
+  description = "Local path to the `ops` private key matching ops_ssh_public_key. Used only to build copy-pasteable `ssh -i ...` hints in the outputs; never uploaded."
+  type        = string
+  default     = "~/.ssh/viaduct_ops"
+}
+
 variable "admin_cidr" {
   description = "List of CIDR ranges allowed inbound SSH. No default — you must supply your own IP /32 (fail closed), e.g. [\"203.0.113.1/32\"]. Set in terraform.tfvars or via TF_VAR_admin_cidr."
   type        = list(string)
@@ -206,4 +212,16 @@ variable "trust_domain" {
   description = "SPIFFE trust domain of the GCP SPIRE server this agent joins."
   type        = string
   default     = "viaduct.gcp"
+}
+
+variable "wg_port" {
+  description = "WireGuard hub UDP port on the GCP control plane (must match the GCP root's wg_port). This spoke dials the hub at GCP_SERVER_IP:wg_port."
+  type        = number
+  default     = 51820
+}
+
+variable "wg_mesh_ip" {
+  description = "This node's fixed address on the 10.99.0.0/24 WireGuard mesh (hub is 10.99.0.1)."
+  type        = string
+  default     = "10.99.0.2"
 }

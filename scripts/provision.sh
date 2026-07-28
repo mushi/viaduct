@@ -275,6 +275,58 @@ if [[ -n "${GCP_SERVER_IP:-}" ]]; then
   fi
 fi
 
+# ── 8c. WireGuard mesh: register with the GCP hub and bring up wg0 ────────────
+# Optional — only in the multi-cloud lab (GCP_SERVER_IP set, i.e. the hub exists).
+# cloud-init generated this node's WG key (0600 on disk). Here we publish its
+# public key to the hub's Vault registry over IAP, receive the hub's public key +
+# endpoint + the shared PSK, write wg0.conf, and start wg-quick. The hub adds us
+# as a live peer inside wg-register-peer.sh. Reaches the hub over IAP (the admin
+# channel), never the mesh, so it works before the mesh exists and in Phase 2.
+if [[ -n "${GCP_SERVER_IP:-}" ]]; then
+  : "${GCP_INSTANCE:?}" "${GCP_ZONE:?}" "${WG_PORT:?}" "${WG_MESH_IP:?}"
+  GCP_KEY="${GCP_SSH_KEY_PATH/#\~/$HOME}"
+  gcp_ssh() {
+    gcloud compute ssh "${GCP_SSH_USER}@${GCP_INSTANCE}" \
+      --zone "${GCP_ZONE}" ${GCP_PROJECT:+--project "${GCP_PROJECT}"} \
+      --tunnel-through-iap --ssh-key-file="${GCP_KEY}" \
+      --ssh-flag="-o StrictHostKeyChecking=accept-new" \
+      --ssh-flag="-o ConnectTimeout=30" \
+      --command "$1"
+  }
+  log "Registering WireGuard peer with the hub ${GCP_INSTANCE} (via IAP)..."
+  HZ_PUB="$(remote cat /etc/wireguard/wg0.pub)"
+  [[ -n "$HZ_PUB" ]] || { log "ERROR: Hetzner wg0.pub missing (cloud-init key-gen did not run)."; exit 1; }
+
+  REG_OUT="$(gcp_ssh "sudo /usr/local/bin/wg-register-peer.sh hetzner ${HZ_PUB} ${WG_MESH_IP}")"
+  HUB_PUB="$(printf '%s\n' "$REG_OUT" | awk '/^hub_public_key /{print $2}')"
+  WG_PSK="$(printf  '%s\n' "$REG_OUT" | awk '/^psk /{print $2}')"
+  [[ -n "$HUB_PUB" && -n "$WG_PSK" ]] || { log "ERROR: hub registration returned no key/psk. Is GCP on the current startup.sh?"; exit 1; }
+
+  # %i stays literal for wg-quick; the heredoc is unquoted so the vars expand.
+  WG_CONF="$(cat <<EOF
+[Interface]
+Address = ${WG_MESH_IP}/24
+PostUp = wg set %i private-key /etc/wireguard/wg0.key
+
+[Peer]
+PublicKey = ${HUB_PUB}
+PresharedKey = ${WG_PSK}
+Endpoint = ${GCP_SERVER_IP}:${WG_PORT}
+AllowedIPs = 10.99.0.0/24
+PersistentKeepalive = 25
+EOF
+)"
+  # Compound write to a root-owned 0600 path: pipe in and let one sudo shell write it.
+  printf '%s\n' "$WG_CONF" | $SSH -- "sudo sh -c 'umask 077; cat > /etc/wireguard/wg0.conf'"
+  $SSH -- "sudo sh -c 'systemctl daemon-reload && systemctl enable wg-quick@wg0 && systemctl restart wg-quick@wg0'"
+  sleep 2
+  if remote "wg show wg0 >/dev/null 2>&1"; then
+    log "WireGuard mesh: wg0 up (hub 10.99.0.1, self ${WG_MESH_IP})."
+  else
+    log "WARNING: wg0 failed to come up. Check: journalctl -u wg-quick@wg0"
+  fi
+fi
+
 # ── 10. Download fresh backups ─────────────────────────────────────────────────
 
 log "Downloading updated backups..."

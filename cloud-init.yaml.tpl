@@ -40,7 +40,7 @@ users:
       - ${ops_ssh_public_key}
     # Genuine least-privilege for interactive debugging: inspect + service
     # lifecycle only, no file writes (systemctl fixed to status/restart/reload).
-    sudo: "ALL=(root) NOPASSWD: /usr/bin/systemctl status *, /usr/bin/systemctl restart *, /usr/bin/systemctl reload *, /usr/bin/journalctl *"
+    sudo: "ALL=(root) NOPASSWD: /usr/bin/systemctl status *, /usr/bin/systemctl restart *, /usr/bin/systemctl reload *, /usr/bin/journalctl *, /usr/bin/wg show, /usr/bin/wg show *"
 
 write_files:
 
@@ -902,6 +902,20 @@ runcmd:
     [Install]
     WantedBy=multi-user.target
     AGENT_UNIT
+
+  # ── WireGuard spoke key (lab: mesh member; provisioner finalises wg0) ──────
+  # Generate the node's WireGuard key on first boot and keep it 0600 on the
+  # persistent disk (Hetzner has no vTPM). The provisioner writes wg0.conf (with
+  # the hub peer) and starts wg-quick; on a reboot the enabled unit reads the
+  # persisted conf + key. A rebuild regenerates the key, and the provisioner
+  # re-registers the new public key with the hub.
+  - |
+    apt-get install -y wireguard-tools
+    install -d -m 0700 /etc/wireguard
+    if [ ! -f /etc/wireguard/wg0.key ]; then
+      ( umask 077; wg genkey > /etc/wireguard/wg0.key )
+      wg pubkey < /etc/wireguard/wg0.key > /etc/wireguard/wg0.pub
+    fi
 
   # ── Register units (do NOT start — provisioner does that) ─────────────────
   - systemctl daemon-reload

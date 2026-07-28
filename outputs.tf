@@ -7,31 +7,36 @@ output "server_ipv6" {
 }
 
 output "ssh_command" {
-  value = "ssh ops@${hcloud_server.conduit.ipv4_address}"
+  value = "ssh -i ${var.ops_ssh_key_path} ops@${hcloud_server.conduit.ipv4_address}"
 }
 
 output "conduit_status" {
-  value = "ssh ops@${hcloud_server.conduit.ipv4_address} 'sudo systemctl status conduit'"
+  value = "ssh -i ${var.ops_ssh_key_path} ops@${hcloud_server.conduit.ipv4_address} 'sudo systemctl status conduit'"
 }
 
 output "conduit_logs" {
-  value = "ssh ops@${hcloud_server.conduit.ipv4_address} 'sudo journalctl -u conduit -f'"
+  value = "ssh -i ${var.ops_ssh_key_path} ops@${hcloud_server.conduit.ipv4_address} 'sudo journalctl -u conduit -f'"
 }
 
 output "xray_status" {
-  value = "ssh ops@${hcloud_server.conduit.ipv4_address} 'sudo systemctl status xray xray-exporter'"
+  value = "ssh -i ${var.ops_ssh_key_path} ops@${hcloud_server.conduit.ipv4_address} 'sudo systemctl status xray xray-exporter'"
 }
 
 output "xray_logs" {
-  value = "ssh ops@${hcloud_server.conduit.ipv4_address} 'sudo journalctl -u xray -f'"
+  value = "ssh -i ${var.ops_ssh_key_path} ops@${hcloud_server.conduit.ipv4_address} 'sudo journalctl -u xray -f'"
 }
 
 output "alloy_status" {
-  value = "ssh ops@${hcloud_server.conduit.ipv4_address} 'sudo systemctl status alloy'"
+  value = "ssh -i ${var.ops_ssh_key_path} ops@${hcloud_server.conduit.ipv4_address} 'sudo systemctl status alloy'"
 }
 
 output "alloy_logs" {
-  value = "ssh ops@${hcloud_server.conduit.ipv4_address} 'sudo journalctl -u alloy -f'"
+  value = "ssh -i ${var.ops_ssh_key_path} ops@${hcloud_server.conduit.ipv4_address} 'sudo journalctl -u alloy -f'"
+}
+
+output "wireguard_status" {
+  description = "Show the WireGuard mesh interface on the data-plane node (private key hidden)."
+  value       = "ssh -i ${var.ops_ssh_key_path} ops@${hcloud_server.conduit.ipv4_address} 'sudo wg show wg0'"
 }
 
 output "vless_client_uris" {

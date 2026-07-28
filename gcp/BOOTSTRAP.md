@@ -206,6 +206,20 @@ vault write auth/gcp/role/restore-agent type=gce \
   bound_zones=<zone> \
   bound_service_accounts=<controlplane-sa-email> \
   policies=restore-secret-ids token_ttl=5m token_max_ttl=10m
+
+# WireGuard hub: reads/creates the durable hub key in kv/wireguard/hub (and,
+# later, PSKs + spoke pubkeys under kv/wireguard). startup.sh §8 logs in with the
+# box's own GCE identity — no secret-id — so the hub public key is stable across
+# rebuilds and the private key only lands in a tmpfs credential.
+vault policy write wireguard-hub - <<'EOF'
+path "kv/data/wireguard/*"     { capabilities = ["create", "read", "update"] }
+path "kv/metadata/wireguard/*" { capabilities = ["read", "list"] }
+EOF
+vault write auth/gcp/role/wireguard-hub type=gce \
+  project_id=<project-id> \
+  bound_zones=<zone> \
+  bound_service_accounts=<controlplane-sa-email> \
+  policies=wireguard-hub token_ttl=5m token_max_ttl=10m
 ```
 
 Test from a **fresh shell** (don't lean on the cached root token), and confirm the admin

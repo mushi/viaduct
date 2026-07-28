@@ -380,56 +380,127 @@ chmod 0755 /usr/local/bin/refresh-aws-certrole.sh
 
 # ── 8. WireGuard hub (private mesh overlay) ───────────────────────────────────
 # This node is the mesh hub: it listens on WG_PORT and Hetzner/AWS/the admin
-# laptop dial in (spokes need no inbound port). The node's private key is
-# generated once at first boot and sealed to the vTPM via systemd-creds — the
-# plaintext key only transits a pipe and never lands on disk. Peers are added
-# later by the provisioner. ip_forward lets the hub route spoke-to-spoke traffic.
+# laptop dial in (spokes need no inbound port). The hub key is DURABLE in Vault
+# (kv/wireguard/hub): generated once on the first bootstrapped boot, then fetched
+# on every boot into a tmpfs credential (/run), so the hub PUBLIC key is stable
+# across rebuilds (spokes never have to re-learn it) and the private key never
+# touches the persistent disk. ip_forward lets the hub route spoke-to-spoke
+# traffic. Peers are added later by the mesh distribution step.
 apt-get install -y wireguard-tools sqlite3
 
-# TSS userspace libraries that systemd-creds dlopens to seal the WG key to the
-# vTPM (esys, rc, mu, and the device TCTI for /dev/tpmrm0). The image ships the
-# vTPM device + kernel driver but NOT these libs, so without them
-# `systemd-creds --with-key=tpm2` fails "Operation not supported" and, under
-# `set -e`, aborts the whole startup script. The sonamed names can drift across
-# Ubuntu releases, so fall back to tpm2-tools (which depends on the right runtime)
-# rather than let a future image silently reintroduce that abort.
-apt-get install -y libtss2-esys-3.0.2-0 libtss2-rc0 libtss2-mu-4.0.1-0 libtss2-tcti-device0 \
-  || apt-get install -y tpm2-tools
-
-WG_ADDR="10.99.0.1/24"                        # hub address on the 10.99.0.0/24 mesh
+WG_ADDR="10.99.0.1/24"                          # hub address on the 10.99.0.0/24 mesh
 WG_PORT="$(md instance/attributes/wg-port)"
+WG_RUN_KEY="/run/wireguard/wg0.key"             # tmpfs (RAM); cleared on reboot, rewritten each boot
 mkdir -p /etc/wireguard && chmod 0700 /etc/wireguard
+install -d -m 0700 /run/wireguard
 
-# Generate + TPM-seal the private key once. tee fans the freshly-generated key to
-# `wg pubkey` (public key, non-secret) and to systemd-creds (TPM-sealed blob);
-# the raw private key is never written to disk.
-if [ ! -f /etc/wireguard/wg0.key.cred ]; then
-  ( umask 077
-    wg genkey | tee >(wg pubkey > /etc/wireguard/wg0.pub) \
-      | systemd-creds encrypt --name=wg0-privkey --with-key=tpm2 - /etc/wireguard/wg0.key.cred )
+# Peer reconcile: the hub derives its WireGuard peers from the Vault registry
+# (kv/wireguard/peers/*), each entry a spoke's {public_key, mesh_ip, psk}. Run at
+# boot (after wg0 is up, so a hub rebuild re-adds every registered spoke) and on
+# demand by a spoke's provisioner right after it registers (so a spoke joins
+# without waiting for a hub reboot). Idempotent: `wg set` upserts each peer. The
+# PSK is passed via a process-substitution fd, never written to disk.
+cat > /usr/local/bin/wg-sync-peers.sh <<'SYNC'
+#!/usr/bin/env bash
+set -euo pipefail
+export VAULT_ADDR="https://127.0.0.1:8200" VAULT_CACERT="/opt/vault/tls/vault.crt"
+VAULT_TOKEN="$(vault login -method=gcp -token-only role=wireguard-hub type=gce)"; export VAULT_TOKEN
+names="$(vault kv list -format=json kv/wireguard/peers 2>/dev/null | jq -r '.[]?' || true)"
+for name in $names; do
+  json="$(vault kv get -format=json "kv/wireguard/peers/$name" 2>/dev/null || true)"
+  [ -n "$json" ] || continue
+  pub="$(printf '%s' "$json" | jq -r '.data.data.public_key // empty')"
+  ip="$(printf '%s' "$json"  | jq -r '.data.data.mesh_ip // empty')"
+  psk="$(printf '%s' "$json" | jq -r '.data.data.psk // empty')"
+  [ -n "$pub" ] && [ -n "$ip" ] || continue
+  if [ -n "$psk" ]; then
+    wg set wg0 peer "$pub" preshared-key <(printf '%s' "$psk") allowed-ips "$ip/32"
+  else
+    wg set wg0 peer "$pub" allowed-ips "$ip/32"
+  fi
+done
+unset VAULT_TOKEN
+SYNC
+chmod 0755 /usr/local/bin/wg-sync-peers.sh
+
+# Register a spoke in the mesh registry, apply it to the running hub, and echo
+# back what the spoke needs. Called by a spoke's provisioner over IAP.
+#   args:   <name> <public_key> <mesh_ip>
+#   stdout: "hub_public_key <key>" then "psk <value>"
+# Idempotent: an existing peer keeps its PSK across re-provisions.
+cat > /usr/local/bin/wg-register-peer.sh <<'REG'
+#!/usr/bin/env bash
+set -euo pipefail
+name="${1:?peer name required}"; pub="${2:?public key required}"; ip="${3:?mesh ip required}"
+case "$name" in *[!a-z0-9-]*) echo "invalid peer name: $name" >&2; exit 1 ;; esac
+export VAULT_ADDR="https://127.0.0.1:8200" VAULT_CACERT="/opt/vault/tls/vault.crt"
+VAULT_TOKEN="$(vault login -method=gcp -token-only role=wireguard-hub type=gce)"; export VAULT_TOKEN
+psk="$(vault kv get -field=psk "kv/wireguard/peers/$name" 2>/dev/null || true)"
+[ -n "$psk" ] || psk="$(wg genpsk)"
+vault kv put "kv/wireguard/peers/$name" public_key="$pub" mesh_ip="$ip" psk="$psk" >/dev/null
+hub_pub="$(vault kv get -field=public_key kv/wireguard/hub)"
+unset VAULT_TOKEN
+/usr/local/bin/wg-sync-peers.sh   # apply to the running hub now, no wait for a reboot
+printf 'hub_public_key %s\npsk %s\n' "$hub_pub" "$psk"
+REG
+chmod 0755 /usr/local/bin/wg-register-peer.sh
+
+# Fetch (or first-time generate) the hub key from Vault. Vault is local and, by
+# this point in startup, unsealed (§6a restores it on a rebuild; a plain reboot
+# auto-unseals via KMS). Auth is the box's own GCE identity via the scoped
+# wireguard-hub gcp-auth role (no secret-id on disk), created in BOOTSTRAP.
+# Guarded: on the first-ever deploy Vault is not bootstrapped yet, so the login
+# fails and we defer wg0 to the next boot rather than aborting startup.
+export VAULT_ADDR="https://127.0.0.1:8200" VAULT_CACERT="/opt/vault/tls/vault.crt"
+WG_HUB_KEY=""
+if WG_TOKEN="$(vault login -method=gcp -token-only role=wireguard-hub type=gce 2>/dev/null)"; then
+  export VAULT_TOKEN="$WG_TOKEN"
+  WG_HUB_KEY="$(vault kv get -field=private_key kv/wireguard/hub 2>/dev/null || true)"
+  if [ -z "$WG_HUB_KEY" ]; then
+    WG_HUB_KEY="$(wg genkey)"
+    vault kv put kv/wireguard/hub \
+      private_key="$WG_HUB_KEY" \
+      public_key="$(printf '%s' "$WG_HUB_KEY" | wg pubkey)" >/dev/null
+  fi
+  unset VAULT_TOKEN WG_TOKEN
 fi
 
-# Interface only: no PrivateKey inline (injected at start from the sealed
-# credential) and no peers yet (the provisioner adds them).
-cat > /etc/wireguard/wg0.conf <<WGCONF
+if [ -n "$WG_HUB_KEY" ]; then
+  ( umask 077; printf '%s\n' "$WG_HUB_KEY" > "$WG_RUN_KEY" )
+  printf '%s' "$WG_HUB_KEY" | wg pubkey > /etc/wireguard/wg0.pub   # non-secret, for inspection
+  WG_HUB_KEY=""
+
+  # Interface only; peers are added later by the mesh distribution step. The
+  # private key is loaded from tmpfs at start, never inlined into this on-disk file.
+  cat > /etc/wireguard/wg0.conf <<WGCONF
 [Interface]
 Address = ${WG_ADDR}
 ListenPort = ${WG_PORT}
-PostUp = wg set %i private-key "\$CREDENTIALS_DIRECTORY/wg0-privkey"
+PostUp = wg set %i private-key ${WG_RUN_KEY}
 WGCONF
-chmod 0600 /etc/wireguard/wg0.conf
+  chmod 0600 /etc/wireguard/wg0.conf
 
-# Drop-in: decrypt the sealed key into the service's runtime credential store
-# (RAM, service-scoped), so PostUp can load it without it ever touching disk.
-mkdir -p /etc/systemd/system/wg-quick@wg0.service.d
-cat > /etc/systemd/system/wg-quick@wg0.service.d/10-credential.conf <<'DROPIN'
-[Service]
-LoadCredentialEncrypted=wg0-privkey:/etc/wireguard/wg0.key.cred
+  # A reboot clears /run, so wg0 must not auto-start before startup.sh rewrites
+  # the key. ConditionPathExists makes the boot-time start SKIP (not fail) while
+  # the key is absent; the explicit restart below brings it up once it is placed.
+  mkdir -p /etc/systemd/system/wg-quick@wg0.service.d
+  cat > /etc/systemd/system/wg-quick@wg0.service.d/10-runkey.conf <<DROPIN
+[Unit]
+ConditionPathExists=${WG_RUN_KEY}
 DROPIN
 
-# Hub routes spoke-to-spoke traffic over the mesh.
-echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-wireguard-forward.conf
-sysctl -p /etc/sysctl.d/99-wireguard-forward.conf
+  # Hub routes spoke-to-spoke traffic over the mesh.
+  echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-wireguard-forward.conf
+  sysctl -p /etc/sysctl.d/99-wireguard-forward.conf
 
-systemctl daemon-reload
-systemctl enable --now wg-quick@wg0
+  systemctl daemon-reload
+  systemctl enable wg-quick@wg0
+  systemctl restart wg-quick@wg0
+
+  # Re-add every registered spoke from the Vault registry. Non-fatal: an empty
+  # registry (no spokes yet) or a transient Vault hiccup must not abort startup,
+  # since wg0 itself is already up.
+  /usr/local/bin/wg-sync-peers.sh || echo "WireGuard hub: peer reconcile deferred (empty registry or Vault not ready)."
+else
+  echo "WireGuard hub: Vault not bootstrapped yet (wireguard-hub role/kv absent); deferring wg0 to the next boot after BOOTSTRAP."
+fi
