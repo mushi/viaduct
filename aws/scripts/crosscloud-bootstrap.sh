@@ -25,8 +25,12 @@ attempt() {
 }
 
 for i in $(seq 1 80); do
-  if attempt; then echo "cross-cloud bootstrap complete"; exit 0; fi
-  rc=$?
+  # Capture attempt's own rc directly. (Using `if attempt; then ... fi` and then
+  # `rc=$?` reads the IF statement's status, which is 0, so a mismatch never
+  # aborted and looped ~20 min.)
+  attempt; rc=$?
+  [ "$rc" = "0" ] && { echo "cross-cloud bootstrap complete"; exit 0; }
+  # A fingerprint mismatch (rc=2) is NOT transient — fail fast instead of looping.
   [ "$rc" = "2" ] && { echo "ABORTED (fingerprint mismatch — possible MITM)"; exit 2; }
   echo "cross-cloud bootstrap attempt $i failed; retry in 15s (is the GCP firewall open to this EIP + Vault aws-vault-agent role configured?)"
   sleep 15

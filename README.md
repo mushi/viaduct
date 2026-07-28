@@ -161,6 +161,19 @@ first** — the other nodes authenticate to its Vault/SPIRE; then Hetzner and AW
 5. **AWS node.** `cd aws && cp terraform.tfvars.example terraform.tfvars`,
    set `gcp_control_plane_ip` + `gcp_vault_fingerprint` (and `gcp_trust_domain`),
    then `terraform init && terraform apply`.
+
+   > **Deployment-identity IAM.** The AWS SSM-driven provisioners — the WireGuard mesh-join
+   > (`aws/wireguard.tf`) and the cross-cloud CA refresh (`aws/crosscloud.tf`) — run SSM Run
+   > Command on the box, and the mesh-join also relays the peer PSK through an SSM SecureString.
+   > So the identity that runs `terraform apply` for `aws/` needs, beyond resource CRUD:
+   > `ssm:SendCommand` (on the `AWS-RunShellScript` document + your instances) and
+   > `ssm:GetCommandInvocation` for both; plus, for the mesh-join PSK only,
+   > `ssm:PutParameter`/`ssm:DeleteParameter` (scoped to `wg_psk_parameter`, default
+   > `/viaduct/wg/aws-psk`) and `kms:Encrypt`/`kms:GenerateDataKey` conditioned on
+   > `kms:ViaService = ssm.<region>.amazonaws.com`. The **instance's** own PSK read-back grant
+   > (`ssm:GetParameter` + `kms:Decrypt`) is Terraform-managed in `aws/wireguard.tf`, so only
+   > this deploy-identity half is a manual, one-time attach. The CA refresh needs no extra
+   > permission beyond the two SSM actions.
 6. **AWS cross-cloud Vault role** (one-time, manual) — follow [K8s Readme](aws/k8s/README.md#vault-cert-auth-bootstrap): create the `aws-vault-agent` cert role on GCP Vault and
    seed `kv/aws/grafana`.
 7. **Complete federation.** Set `aws_spire_ip` and `federation_cidrs` in

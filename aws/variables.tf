@@ -106,10 +106,24 @@ variable "gcp_project" {
   default     = ""
 }
 
-variable "gcp_vault_fingerprint" {
-  description = "SHA-256 fingerprint of GCP Vault's self-signed listener cert (colon-hex, e.g. AA:BB:...), pinned to verify the TOFU-fetched vault.crt. From: openssl x509 -in /opt/vault/tls/vault.crt -noout -fingerprint -sha256 on the GCP box."
+# ── WireGuard mesh (this node is a spoke; the GCP control plane is the hub) ────
+
+variable "wg_port" {
+  description = "WireGuard hub UDP port on the GCP control plane (must match the GCP root's wg_port). This spoke dials the hub at gcp_control_plane_ip:wg_port."
+  type        = number
+  default     = 51820
+}
+
+variable "wg_mesh_ip" {
+  description = "This node's fixed address on the 10.99.0.0/24 WireGuard mesh (hub is 10.99.0.1, Hetzner 10.99.0.2)."
   type        = string
-  default     = ""
+  default     = "10.99.0.3"
+}
+
+variable "wg_psk_parameter" {
+  description = "SSM Parameter Store name used to relay this spoke's WireGuard PSK from the provisioner to the box (SecureString; written then deleted per apply). Must begin with '/'."
+  type        = string
+  default     = "/viaduct/wg/aws-psk"
 }
 
 variable "gcp_trust_domain" {

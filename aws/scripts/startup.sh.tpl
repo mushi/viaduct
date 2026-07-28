@@ -17,7 +17,6 @@ log() { echo "[viaduct-startup] $(date -u +%H:%M:%S) $*"; }
 # ─── Terraform-injected values (the only templatefile tokens in this script) ──
 REGION="${region}"
 GCP_IP="${gcp_control_plane_ip}"
-GCP_FP="${gcp_vault_fingerprint}"
 TRUST_DOMAIN="${trust_domain}"
 GCP_TRUST_DOMAIN="${gcp_trust_domain}"
 SPIRE_VERSION="${spire_version}"
@@ -220,10 +219,16 @@ EOF
 systemctl daemon-reload
 systemctl enable --now egress-guardrail.timer
 
-# ─── 10. cross-cloud bootstrap (retries until GCP reachable) ──────────────────
+# ─── 10. cross-cloud bootstrap (installed here, DRIVEN by the AWS-root provisioner) ──
+# GCP's self-signed Vault listener cert rotates on every GCP rebuild, so a
+# fingerprint baked into user_data would go stale and this script would loop.
+# Instead aws/scripts/crosscloud-refresh.sh (run by null_resource.crosscloud_refresh)
+# reads the CURRENT fingerprint from the GCP box over IAP, writes GCP_FP into
+# crosscloud.env over SSM, and runs this bootstrap. So we only lay down the static
+# config + script + unit here and do NOT start it — which also keeps crosscloud
+# from blocking the rest of user_data (e.g. §11).
 cat > /opt/viaduct/crosscloud.env <<EOF
 GCP_IP=$GCP_IP
-GCP_FP=$GCP_FP
 GCP_TRUST_DOMAIN=$GCP_TRUST_DOMAIN
 EOF
 install -m0755 /dev/stdin /opt/viaduct/crosscloud-bootstrap.sh <<'CROSSCLOUD'
@@ -238,10 +243,21 @@ Wants=network-online.target
 Type=oneshot
 ExecStart=/opt/viaduct/crosscloud-bootstrap.sh
 RemainAfterExit=true
-[Install]
-WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable --now viaduct-crosscloud.service || true
+
+# ─── 11. WireGuard spoke key (mesh member; provisioner finalises wg0) ──────────
+# Generate this node's WG key on first boot, 0600 on the persistent disk. The
+# arm64 AMI exposes no NitroTPM, so there is no vTPM to seal to; this matches how
+# the other spoke (Hetzner) holds its key. The provisioner writes wg0.conf with
+# the hub peer over SSM and starts wg-quick; on a reboot the enabled unit reads
+# the persisted conf + key. A rebuild regenerates the key, and the provisioner
+# re-registers the new public key with the hub.
+apt-get install -y -qq wireguard-tools >/dev/null
+install -d -m 0700 /etc/wireguard
+if [ ! -f /etc/wireguard/wg0.key ]; then
+  ( umask 077; wg genkey > /etc/wireguard/wg0.key )
+  wg pubkey < /etc/wireguard/wg0.key > /etc/wireguard/wg0.pub
+fi
 
 log "Viaduct AWS node provisioning complete (cross-cloud bootstrap runs in background)."

@@ -15,5 +15,4 @@ spire_sha256  = "<sha256 of spire-1.15.1-linux-arm64-musl.tar.gz>"
 
 # Cross-cloud federation (deploy gcp/ first to obtain these)
 gcp_control_plane_ip  = "203.0.113.10"   # GCP control-plane IP (Vault :8200 + SPIRE bundle :8443)
-gcp_vault_fingerprint = "<openssl x509 -in /opt/vault/tls/vault.crt -noout -fingerprint -sha256 on the GCP box>"
 gcp_project          = ""                    # empty uses gcloud's active project

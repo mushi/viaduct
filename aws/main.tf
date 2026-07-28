@@ -228,7 +228,6 @@ resource "aws_instance" "spire" {
   user_data_base64 = base64gzip(templatefile("${path.module}/scripts/startup.sh.tpl", {
     region                = var.region
     gcp_control_plane_ip  = var.gcp_control_plane_ip
-    gcp_vault_fingerprint = var.gcp_vault_fingerprint
     trust_domain          = var.trust_domain
     gcp_trust_domain      = var.gcp_trust_domain
     spire_version         = var.spire_version
