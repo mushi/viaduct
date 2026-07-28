@@ -271,7 +271,7 @@ resource "google_compute_instance" "controlplane" {
 
     aws-certrole-approle-role-id = var.aws_certrole_approle_role_id
     wg-port                      = tostring(var.wg_port)
-    aws-spire-ip          = var.aws_spire_ip
+    aws-spire-ip                 = var.aws_spire_ip
 
     snapshot-approle-role-id = var.snapshot_approle_role_id
     snapshot-bucket          = google_storage_bucket.vault_snapshots.name

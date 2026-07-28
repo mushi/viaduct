@@ -95,11 +95,6 @@ resource "aws_vpc_security_group_egress_rule" "all" {
   cidr_ipv4         = "0.0.0.0/0"
 }
 
-# ─── SSH key pair ────────────────────────────────────────────────────────────
-resource "aws_key_pair" "viaduct" {
-  key_name   = "viaduct-aws"
-  public_key = var.ssh_public_key
-}
 
 # ─── IAM: instance identity (no static keys) ─────────────────────────────────
 # The instance role grants exactly two capabilities:
@@ -218,7 +213,6 @@ resource "aws_instance" "spire" {
   instance_type          = var.instance_type
   subnet_id              = aws_subnet.viaduct.id
   vpc_security_group_ids = [aws_security_group.spire.id]
-  key_name               = aws_key_pair.viaduct.key_name
   iam_instance_profile   = aws_iam_instance_profile.spire.name
 
   # One-phase provisioning, runs once at instance creation: SPIRE server+agent,
@@ -226,19 +220,19 @@ resource "aws_instance" "spire" {
   # single-sourced from k8s/ and scripts/ (injected verbatim via file()).
   # gzip'd: rendered script exceeds the 16 KB user_data cap; cloud-init decompresses.
   user_data_base64 = base64gzip(templatefile("${path.module}/scripts/startup.sh.tpl", {
-    region                = var.region
-    gcp_control_plane_ip  = var.gcp_control_plane_ip
-    trust_domain          = var.trust_domain
-    gcp_trust_domain      = var.gcp_trust_domain
-    spire_version         = var.spire_version
-    spire_sha256          = var.spire_sha256
-    k3s_version           = var.k3s_version
-    k8s_rbac              = file("${path.module}/k8s/00-namespaces-rbac.yaml")
-    k8s_csi               = file("${path.module}/k8s/01-spiffe-csi-driver.yaml")
-    k8s_conduit           = file("${path.module}/k8s/10-conduit.yaml")
-    k8s_alloy             = file("${path.module}/k8s/20-alloy.yaml")
-    guardrail_script      = file("${path.module}/scripts/egress-guardrail.sh")
-    crosscloud_script     = file("${path.module}/scripts/crosscloud-bootstrap.sh")
+    region               = var.region
+    gcp_control_plane_ip = var.gcp_control_plane_ip
+    trust_domain         = var.trust_domain
+    gcp_trust_domain     = var.gcp_trust_domain
+    spire_version        = var.spire_version
+    spire_sha256         = var.spire_sha256
+    k3s_version          = var.k3s_version
+    k8s_rbac             = file("${path.module}/k8s/00-namespaces-rbac.yaml")
+    k8s_csi              = file("${path.module}/k8s/01-spiffe-csi-driver.yaml")
+    k8s_conduit          = file("${path.module}/k8s/10-conduit.yaml")
+    k8s_alloy            = file("${path.module}/k8s/20-alloy.yaml")
+    guardrail_script     = file("${path.module}/scripts/egress-guardrail.sh")
+    crosscloud_script    = file("${path.module}/scripts/crosscloud-bootstrap.sh")
   }))
   # Changing user_data relaunches the instance. Acceptable here, but note what
   # actually survives: the CA private keys persist in KMS, yet the CA journal lives

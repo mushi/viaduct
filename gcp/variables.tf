@@ -56,11 +56,6 @@ variable "ssh_private_key_path" {
   default     = "~/.ssh/viaduct_lab"
 }
 
-variable "admin_cidr" {
-  description = "CIDR(s) allowed to SSH (port 22). Restrict to your own IP /32."
-  type        = list(string)
-}
-
 variable "agent_cidrs" {
   description = "CIDR(s) allowed to reach Vault (8200) and SPIRE server (8081): the AWS and Hetzner node IPs. Empty until known."
   type        = list(string)

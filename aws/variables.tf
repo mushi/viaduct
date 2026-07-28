@@ -28,21 +28,6 @@ variable "root_volume_gb" {
   default     = 30
 }
 
-variable "ssh_user" {
-  description = "Default login user baked into the Ubuntu AMI (ssh ubuntu@<eip>)."
-  type        = string
-  default     = "ubuntu"
-}
-
-variable "ssh_public_key" {
-  description = "SSH public key content (not a path); registered as an EC2 key pair."
-  type        = string
-}
-
-variable "admin_cidr" {
-  description = "CIDR(s) allowed to SSH (port 22). Restrict to your own IP /32."
-  type        = list(string)
-}
 
 # ─── Federation (cross-cloud trust with viaduct.gcp) ─────────────────────────
 variable "bundle_endpoint_port" {

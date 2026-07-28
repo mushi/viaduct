@@ -1,8 +1,5 @@
 region = "ap-south-1" # Mumbai
 
-# SSH public key content (not a path), e.g. contents of ~/.ssh/viaduct_lab.pub
-ssh_public_key = "ssh-ed25519 AAAA... your-key-here"
-
 # GCP SPIRE server IP /32, added in A3 once federation is wired. Empty disables
 # the bundle-endpoint ingress rule.
 federation_cidrs = []

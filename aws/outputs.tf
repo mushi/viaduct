@@ -1,5 +1,5 @@
 output "instance_public_ip" {
-  description = "Stable Elastic IP of the AWS node (SSH here, and the SPIRE bundle-endpoint / Conduit address)."
+  description = "Stable Elastic IP of the AWS node (SPIRE bundle-endpoint + Conduit address; admin is via SSM, not SSH)."
   value       = aws_eip.spire.public_ip
 }
 
@@ -8,13 +8,13 @@ output "instance_id" {
   value       = aws_instance.spire.id
 }
 
-output "ssh_command" {
-  description = "Ready-to-run SSH one-liner."
-  value       = "ssh ${var.ssh_user}@${aws_eip.spire.public_ip}"
+output "ssm_session" {
+  description = "Open an admin shell on the AWS node (no public SSH; SSM only)."
+  value       = "aws ssm start-session --region ${var.region} --target ${aws_instance.spire.id}"
 }
 
 output "bundle_endpoint_url" {
-  description = "SPIRE federation bundle endpoint the GCP server will fetch (live in A2/A3)."
+  description = "SPIRE federation bundle endpoint the GCP server fetches."
   value       = "https://${aws_eip.spire.public_ip}:${var.bundle_endpoint_port}"
 }
 
