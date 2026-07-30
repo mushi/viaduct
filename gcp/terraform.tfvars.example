@@ -1,30 +1,34 @@
-project_id = "your-gcp-project-id"
-region     = "us-central1"
-zone       = "us-central1-a"
+# Copy to terraform.tfvars and fill in your values.
+# terraform.tfvars is gitignored, do not commit it.
 
-# Admin username + SSH public key content (not a path).
-ssh_user       = "viaduct"
-ssh_public_key = "ssh-ed25519 AAAA... your-key-here"
+# ── Required ──────────────────────────────────────────────────────────────────
+project_id           = "your-gcp-project-id"
+ssh_public_key       = "ssh-ed25519 AAAA... your-key-here"   # key content, not a path
+snapshot_bucket_name = "your-unique-vault-snapshot-bucket"   # globally unique
+vault_version        = "2.0.2-1"                             # verify: apt-cache madison vault
 
-# AWS + Hetzner node IPs, added once those nodes exist. Empty disables the
-# Vault/SPIRE ingress rule.
-agent_cidrs = []
+# SPIRE server (linux-amd64-musl tarball)
+spire_version = "1.15.1"
+spire_sha256  = "<sha256 of spire-1.15.1-linux-amd64-musl.tar.gz>"
 
-# Globally-unique GCS bucket name for Vault Raft snapshots.
-snapshot_bucket_name = "your-unique-vault-snapshot-bucket"
+# Vault AppRole role_ids (non-secret): generate each with `uuidgen`. bootstrap-vault.sh
+# sets them on the AppRoles, so there is no read-back into tfvars.
+spire_approle_role_id    = "generate-with-uuidgen"
+snapshot_approle_role_id = "generate-with-uuidgen"
 
-# Vault apt package version to pin (verify: apt-cache madison vault).
-vault_version = "1.18.5-1"
+# ── Multi-cloud lab (set for cross-cloud federation; leave empty for standalone) ─
+aws_spire_ip                 = "10.99.0.3"              # AWS node's mesh address (federates_with viaduct.aws)
+aws_certrole_approle_role_id = "generate-with-uuidgen" # aws-vault-agent cert-role refresh
 
-# SPIRE server
-spire_version         = "1.15.1"
-spire_sha256          = "<sha256 of spire-1.15.1-linux-amd64-musl.tar.gz>"
-spire_approle_role_id = "<vault approle role_id>"
-trust_domain          = "viaduct.gcp"
-
-# Vault snapshot job AppRole role_id (non-secret).
-snapshot_approle_role_id     = "<vault approle role_id>"
-aws_certrole_approle_role_id = "<vault approle role_id>"
-
-# AWS SPIRE server IP for federation (federates_with viaduct.aws); empty = standalone
-aws_spire_ip = "203.0.113.20"
+# ── Optional (defaults shown; uncomment to override) ──────────────────────────
+# region                    = "us-central1"           # free-tier: us-west1 / us-central1 / us-east1
+# zone                      = "us-central1-a"
+# instance_name             = "viaduct-controlplane"
+# machine_type              = "e2-micro"              # free-tier eligible (compute only)
+# boot_image                = "ubuntu-os-cloud/ubuntu-2404-lts-amd64"
+# allow_stopping_for_update = false                   # true permits stop/start on in-place changes
+# ssh_user                  = "viaduct"
+# ssh_private_key_path      = "~/.ssh/viaduct_lab"    # readiness check over IAP; never uploaded
+# trust_domain              = "viaduct.gcp"
+# wg_port                   = 51820                   # WireGuard hub UDP port (the only public control-plane port)
+# wg_ingress_cidrs          = ["0.0.0.0/0"]           # tighten to spoke IPs for an extra IP filter

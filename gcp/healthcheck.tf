@@ -11,8 +11,8 @@
 # resource as replaced; that is expected. Skip it with -target for a pure
 # metadata-only apply if ever needed. The check only reads state; it never
 # modifies the instance.
-resource "null_resource" "controlplane_ready" {
-  triggers = {
+resource "terraform_data" "controlplane_ready" {
+  triggers_replace = {
     always_run = timestamp()
   }
 

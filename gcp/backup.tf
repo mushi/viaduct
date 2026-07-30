@@ -10,9 +10,10 @@
 # Keyed on instance_id, not timestamp(): the backup must run only when the
 # instance is actually being replaced/destroyed, never on a plain metadata apply.
 # Destroy-time provisioners may reference only `self`, so the script path and all
-# the values it needs are captured in triggers and read back via self.triggers.
-resource "null_resource" "prereplace_backup" {
-  triggers = {
+# the values it needs are captured in triggers_replace and read back via
+# self.triggers_replace.
+resource "terraform_data" "prereplace_backup" {
+  triggers_replace = {
     instance_id = google_compute_instance.controlplane.id
     instance    = google_compute_instance.controlplane.name
     zone        = google_compute_instance.controlplane.zone
@@ -24,14 +25,14 @@ resource "null_resource" "prereplace_backup" {
 
   provisioner "local-exec" {
     when        = destroy
-    command     = self.triggers.script
+    command     = self.triggers_replace.script
     interpreter = ["/usr/bin/env", "bash"]
     environment = {
-      GCP_INSTANCE     = self.triggers.instance
-      GCP_ZONE         = self.triggers.zone
-      GCP_PROJECT      = self.triggers.project
-      GCP_SSH_USER     = self.triggers.ssh_user
-      GCP_SSH_KEY_PATH = self.triggers.ssh_key
+      GCP_INSTANCE     = self.triggers_replace.instance
+      GCP_ZONE         = self.triggers_replace.zone
+      GCP_PROJECT      = self.triggers_replace.project
+      GCP_SSH_USER     = self.triggers_replace.ssh_user
+      GCP_SSH_KEY_PATH = self.triggers_replace.ssh_key
     }
   }
 }

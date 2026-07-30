@@ -1,68 +1,42 @@
-# AWS node — Kubernetes manifests
+# AWS node: Kubernetes manifests
 
 `aws/startup.sh` deploys all of this automatically at instance creation (manifests
-embedded via Terraform `file()`) and is the source of truth for ordering.
-
-> [!IMPORTANT]  
-> Vault TLS authentication requires manual steps, documented [below](#vault-cert-auth-bootstrap).
-
+embedded via Terraform `file()`) and is the source of truth for ordering. The Vault side
+(the `aws-vault-agent` cert role, `aws-workload` policy, `kv/aws/grafana` secret) is set up
+per [docs/RUNBOOK.md](../../docs/RUNBOOK.md).
 
 ## Manifests
 
 | File | Purpose |
 |---|---|
-| `00-namespaces-rbac.yaml` | `spire` + `viaduct` namespaces; SA + token for the host agent's k8s WorkloadAttestor; SA `vault-agent` (the workload identity) |
-| `01-spiffe-csi-driver.yaml` | SPIFFE CSI driver — projects the agent's Workload API socket into pods (upstream v0.2.12, socket path adapted) |
+| `00-namespaces-rbac.yaml` | `spire` + `viaduct` namespaces; SA + read-only pods/nodes ClusterRole for the host agent's k8s WorkloadAttestor (token is minted/rotated on the host, not a standing Secret); SA `vault-agent` (the workload identity) |
+| `01-spiffe-csi-driver.yaml` | SPIFFE CSI driver, projects the agent's Workload API socket into pods (upstream v0.2.12, socket path adapted) |
 | `10-conduit.yaml` | Egress-capped Conduit relay + metrics Service |
 | `20-alloy.yaml` | Alloy → Grafana Cloud; fetches its token cross-cloud from GCP Vault |
 
 ## Sequence (performed by `startup.sh`)
 
-1. Install SPIRE server + agent and k3s; apply `00` → host writes the SA token to `/opt/spire/conf/agent/k8s-sa-token`, agent gains the `k8s` attestor.
+1. Install SPIRE server + agent and k3s; apply `00` → host mints a short-lived SA token (`kubectl create token spire-agent -n spire --duration=24h`) to `/opt/spire/conf/agent/k8s-sa-token` and starts a systemd timer that rotates it (see [Hardening](#hardening)); agent gains the `k8s` attestor.
 2. Apply `01` (CSI) and `10` (Conduit).
-3. Register `spiffe://viaduct.aws/vault-agent` — parent = the runtime `aws_iid` agent ID, selectors `k8s:ns:viaduct` + `k8s:sa:vault-agent`, `-dns vault-agent.aws`.
-4. Cross-cloud bootstrap (`../scripts/crosscloud-bootstrap.sh`, retries until GCP is reachable): import the `viaduct.gcp` federated bundle, fetch + fingerprint-verify `vault.crt`, create the `vault-ca` ConfigMap, apply `20` (Alloy). **Requires the Vault role below.**
+3. Register `spiffe://viaduct.aws/vault-agent`, parent = the runtime `aws_iid` agent ID, selectors `k8s:ns:viaduct` + `k8s:sa:vault-agent`, `-dns vault-agent.aws`.
+4. Cross-cloud bootstrap (`../scripts/crosscloud-bootstrap.sh`, retries until GCP is reachable): import the `viaduct.gcp` federated bundle, fetch + fingerprint-verify `vault.crt`, create the `vault-ca` ConfigMap, apply `20` (Alloy).
 
-To apply by hand, follow the same order — substitute the `__GCP_CONTROL_PLANE_IP__`
-placeholder in `20` first (`sed "s|__GCP_CONTROL_PLANE_IP__|<gcp-ip>|g"`), and ensure the
-Vault role exists before applying `20`.
+Alloy authenticates to GCP Vault with the `aws-vault-agent` cert role, which
+`federation-sync` creates automatically on every AWS build. The `aws-workload` policy it
+carries and the `kv/aws/grafana` secret it reads are set during Vault bootstrap (see
+[docs/RUNBOOK.md](../../docs/RUNBOOK.md)).
 
-## Vault cert auth bootstrap
-
-Not automatable in `startup.sh` (needs a privileged Vault token). Run on the GCP box:
-
-```sh
-export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true
-read -rsp 'VAULT_TOKEN: ' VAULT_TOKEN; export VAULT_TOKEN; echo   # prompted, kept out of shell history
-
-# trust the viaduct.aws root (from GCP's federated bundle store) for cert-auth
-sudo /usr/local/bin/spire-server bundle list -id spiffe://viaduct.aws -format pem > /tmp/aws-root.pem
-vault policy write aws-workload - <<'EOF'
-path "kv/data/aws/*" { capabilities = ["read"] }
-EOF
-vault write auth/cert/certs/aws-vault-agent \
-  display_name=aws-vault-agent policies=aws-workload \
-  certificate=@/tmp/aws-root.pem \
-  allowed_uri_sans="spiffe://viaduct.aws/vault-agent" \
-  token_ttl=20m token_max_ttl=1h
-rm -f /tmp/aws-root.pem
-
-# the AWS node's own secrets (disjoint per node): Grafana Cloud creds for Alloy
-vault kv put kv/aws/grafana \
-  prometheus_url='<grafana_cloud_prometheus_url>' \
-  prometheus_user='<grafana_cloud_prometheus_user>' \
-  api_key='<grafana_cloud_metrics:write_token>'
-```
-
-> Use a scoped admin token, not the root token, for this. If you must use root,
-> `vault token revoke -self` when done — root tokens have no TTL and otherwise live
-> on indefinitely (in memory, `~/.vault-token`, scrollback).
+To apply by hand, follow the same order and substitute the `__GCP_CONTROL_PLANE_IP__`
+placeholder in `20` first (`sed "s|__GCP_CONTROL_PLANE_IP__|<gcp-ip>|g"`).
 
 ## Notes
 
-- The `vault-ca` ConfigMap, the SA token, and the SPIRE entry aren't vendored as YAML — they depend on a host cert, a runtime instance-id, and a generated token.
+- The `vault-ca` ConfigMap, the k8s SA token, and the SPIRE entry aren't vendored as YAML, they depend on a host cert, a runtime instance-id, and a host-minted token (see [Hardening](#hardening)).
 - Egress cost is bounded by the host `egress-guardrail` timer (auto-stop near 90 GB/mo); the gauge `aws_mtd_egress_bytes` / `aws_egress_cap_bytes` reaches Grafana via the Alloy unix-exporter textfile collector.
 
-## Hardening (deferred)
+## Hardening
 
-- The host k8s SA token (`spire-agent-token` Secret → `/opt/spire/conf/agent/k8s-sa-token`) is **long-lived**. It's read-only (pods/nodes get/list) and `0600 root`, so low risk on a single-node box — but to drop the standing token, remove the Secret and have a systemd timer mint a short-lived one (`kubectl create token spire-agent -n spire --duration=24h`) that rewrites the file. (A DaemonSet agent gets a projected token natively; the host agent we run for `aws_iid` can't use a projected-token volume.)
+- **Short-lived, rotated k8s SA token (implemented).** The host k8s WorkloadAttestor no longer relies on a standing `spire-agent-token` Secret. Instead the `spire-agent-token.service` oneshot mints a 24h token (`kubectl create token spire-agent -n spire --duration=24h`, via the node's k3s admin kubeconfig) and atomically rewrites `/opt/spire/conf/agent/k8s-sa-token` (`0600 root`); the `spire-agent-token.timer` rotates it every 12h (well inside the 24h TTL) and re-mints ~1min after each boot (the root disk survives stop/start, so a persisted token can be expired on restart). `spire-agent.service` orders after the mint (weak `Wants`) so a reboot gets a fresh token before the agent starts.
+  - **No restart / no attestation gap.** The k8s attestor uses the *secure* kubelet client (no read-only port is configured, so it defaults to `10250`, `secure=true`). That client re-reads `token_path` from disk on its `reload_interval` (SPIRE default 1m) on the next `Attest` call, so a rotated file is picked up automatically without restarting `spire-agent`. The atomic `mv` guarantees the attestor never reads a partially written token.
+  - **RBAC surface.** The minted token authenticates *as* the `spire-agent` SA to the kubelet, carrying only the existing read-only `pods`/`nodes` `get`/`list` ClusterRole, exactly what the attestor needs. Minting (`create` on the `spire-agent` SA token) is performed by the host's k3s cluster-admin kubeconfig (`/etc/rancher/k3s/k3s.yaml`), so no standing token-creation grant is added to any in-cluster workload SA.
+  - **Why host-mint and not a projected volume.** A DaemonSet agent would get a rotated projected token natively, but the host agent we run for `aws_iid` node attestation isn't a pod and can't use a projected-token volume, hence the systemd timer-mint. (vTPM/NitroTPM sealing was considered and rejected for this token: short-lived rotation is the correct fix, and NitroTPM isn't enabled on this instance.)

@@ -1,5 +1,5 @@
 # ── WireGuard mesh: join the AWS spoke to the GCP hub ─────────────────────────
-# After an AWS rebuild (user_data_replace_on_change → new instance id), register
+# After an AWS rebuild (terraform apply -replace → new instance id), register
 # this node's freshly generated WG public key with the hub and bring up wg0.
 # Reaches the box over SSM and the hub over IAP (see scripts/wg-mesh-join.sh).
 # data.terraform_remote_state.gcp is declared in federation-sync.tf (same root).
@@ -28,10 +28,10 @@ resource "aws_iam_role_policy" "wg_psk_read" {
   })
 }
 
-resource "null_resource" "wg_mesh_join" {
+resource "terraform_data" "wg_mesh_join" {
   # Fires on a rebuild (new instance id), the same trigger as federation-sync,
   # so the spoke re-registers its fresh key exactly when it changes.
-  triggers = {
+  triggers_replace = {
     aws_instance_id = aws_instance.spire.id
   }
 

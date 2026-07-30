@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.3"
+  required_version = ">= 1.4" # terraform_data (built-in) replaces the null provider
 
   required_providers {
     hcloud = {
@@ -13,10 +13,6 @@ terraform {
     local = {
       source  = "hashicorp/local"
       version = "~> 2.5"
-    }
-    null = {
-      source  = "hashicorp/null"
-      version = "~> 3.2"
     }
   }
 }
@@ -141,7 +137,7 @@ data "cloudinit_config" "conduit" {
       alloy_zip_sha256      = var.alloy_zip_sha256
       spire_agent_version   = var.spire_agent_version
       spire_agent_sha256    = var.spire_agent_sha256
-      gcp_spire_server_ip   = local.spire_server_ip
+      spire_server_address  = var.wg_hub_ip
       trust_domain          = var.trust_domain
       ssh_public_key        = var.ssh_public_key
       ops_ssh_public_key    = var.ops_ssh_public_key
@@ -217,8 +213,8 @@ resource "local_file" "alloy_config" {
 #   6. Starts / restarts conduit and xray
 #   7. Downloads fresh backups locally
 
-resource "null_resource" "provision" {
-  triggers = {
+resource "terraform_data" "provision" {
+  triggers_replace = {
     server_id  = hcloud_server.conduit.id
     users_hash = sha256(local_file.users_txt.content)
     alloy_hash = sha256(local_file.alloy_config.content)

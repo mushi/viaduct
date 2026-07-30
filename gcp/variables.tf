@@ -56,18 +56,6 @@ variable "ssh_private_key_path" {
   default     = "~/.ssh/viaduct_lab"
 }
 
-variable "agent_cidrs" {
-  description = "CIDR(s) allowed to reach Vault (8200) and SPIRE server (8081): the AWS and Hetzner node IPs. Empty until known."
-  type        = list(string)
-  default     = []
-}
-
-variable "federation_cidrs" {
-  description = "CIDR(s) allowed to reach the SPIRE federation bundle endpoint (8443): the AWS SPIRE server IP /32. Separate from agent_cidrs so federation does not also open Vault/8081. Empty disables the rule."
-  type        = list(string)
-  default     = []
-}
-
 variable "aws_spire_ip" {
   description = "AWS SPIRE server IP for cross-cloud federation (federates_with viaduct.aws). Empty omits the federation block from the generated SPIRE server config (standalone deploy)."
   type        = string
@@ -125,7 +113,7 @@ variable "wg_port" {
 }
 
 variable "wg_ingress_cidrs" {
-  description = "IPv4 CIDRs allowed to reach the WireGuard hub port. Default open: WireGuard silently drops any non-peer packet, so the crypto is the real gate. Tighten to the spoke public IPs (Hetzner /32, AWS EIP /32, your laptop /32) if you want an extra IP filter, accepting the IP-churn maintenance. IPv4 only: the hub endpoint is IPv4, and a GCP firewall rule cannot mix v4 and v6 source ranges."
+  description = "IPv4 CIDRs allowed to reach the WireGuard hub port. Default open: WireGuard silently drops any non-peer packet, so the crypto is the real gate. Tighten to the spoke public IPs (Hetzner /32, AWS EIP /32, your operator computer /32) if you want an extra IP filter, accepting the IP-churn maintenance. IPv4 only: the hub endpoint is IPv4, and a GCP firewall rule cannot mix v4 and v6 source ranges."
   type        = list(string)
   default     = ["0.0.0.0/0"]
 }

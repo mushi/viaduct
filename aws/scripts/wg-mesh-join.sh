@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # aws/scripts/wg-mesh-join.sh
 #
-# Runs locally via Terraform (null_resource.wg_mesh_join) after an AWS rebuild.
+# Runs locally via Terraform (terraform_data.wg_mesh_join) after an AWS rebuild.
 # Joins the AWS node to the WireGuard mesh, mirroring the Hetzner provisioner but
 # over the AWS-native channels: SSM to reach the box, IAP to reach the GCP hub.
 #
@@ -85,7 +85,7 @@ aws ssm put-parameter --region "$AWS_REGION" --name "$PSK_PARAM" \
 trap 'aws ssm delete-parameter --region "$AWS_REGION" --name "$PSK_PARAM" >/dev/null 2>&1 || true' EXIT
 
 # Remote script: fetch the PSK by name (never echoed), write wg0.conf, start the
-# tunnel. Laptop-side vars are already expanded; \${psk} and %i stay literal for
+# tunnel. Operator-side vars are already expanded; \${psk} and %i stay literal for
 # the box / wg-quick. Base64 so the multi-line script needs no JSON gymnastics.
 REMOTE="$(cat <<REOF
 set -e

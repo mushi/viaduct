@@ -48,14 +48,11 @@ resource "google_compute_firewall" "iap_ssh" {
   target_tags   = ["viaduct-controlplane"]
 }
 
-# Vault (8200) + SPIRE server (8081), restricted to the agent node IPs.
-# Created only once agent_cidrs is non-empty (AWS + Hetzner IPs known).
-# WireGuard hub: the single public UDP port for the private mesh overlay. The GCP
-# node is the hub; Hetzner, AWS, and the admin laptop dial in. WireGuard silently
-# drops any packet not signed by a configured peer, so 0.0.0.0/0 is a safe default
-# (the crypto is the gate); tighten wg_ingress_cidrs to the spoke IPs if you prefer,
-# accepting the IP-churn maintenance. Phase 1 opens this; the control-plane rules
-# below move behind the mesh in Phase 2.
+# WireGuard hub: the single public UDP port for the private mesh overlay, and the
+# only world-facing ingress on this node. The GCP node is the hub; Hetzner, AWS, and the
+# operator dial in. WireGuard silently drops any packet not signed by a configured
+# peer, so 0.0.0.0/0 is a safe default (the crypto is the gate); tighten wg_ingress_cidrs
+# to the spoke IPs if you prefer, accepting the IP-churn maintenance.
 resource "google_compute_firewall" "wireguard" {
   name      = "viaduct-allow-wireguard"
   network   = google_compute_network.viaduct.name
@@ -70,38 +67,13 @@ resource "google_compute_firewall" "wireguard" {
   target_tags   = ["viaduct-controlplane"]
 }
 
-resource "google_compute_firewall" "controlplane" {
-  count     = length(var.agent_cidrs) > 0 ? 1 : 0
-  name      = "viaduct-allow-controlplane"
-  network   = google_compute_network.viaduct.name
-  direction = "INGRESS"
-
-  allow {
-    protocol = "tcp"
-    ports    = ["8200", "8081"]
-  }
-
-  source_ranges = var.agent_cidrs
-  target_tags   = ["viaduct-controlplane"]
-}
-
-# SPIRE federation bundle endpoint (8443), restricted to the AWS SPIRE server IP.
-# Deliberately a separate rule from controlplane so opening federation does NOT
-# also expose Vault (8200) or the SPIRE agent API (8081) to the AWS node.
-resource "google_compute_firewall" "federation" {
-  count     = length(var.federation_cidrs) > 0 ? 1 : 0
-  name      = "viaduct-allow-federation"
-  network   = google_compute_network.viaduct.name
-  direction = "INGRESS"
-
-  allow {
-    protocol = "tcp"
-    ports    = ["8443"]
-  }
-
-  source_ranges = var.federation_cidrs
-  target_tags   = ["viaduct-controlplane"]
-}
+# No public control-plane ingress by design. Vault (8200), the SPIRE server API
+# (8081) and the SPIRE federation bundle endpoint (8443) listen on 0.0.0.0 but are
+# reachable ONLY over the WireGuard mesh (10.99.0.1): mesh packets arrive decrypted
+# on wg0 and are delivered locally, which the VPC firewall never sees, so no allow
+# rule is needed for them. Re-exposing any of these publicly requires adding a new
+# firewall rule here (a reviewable change), not flipping a variable. Break-glass to
+# Vault is over IAP SSH to the box, then 127.0.0.1:8200 — never the public IP.
 
 # ─── Service account (instance identity; no static key) ──────────────────────
 resource "google_service_account" "controlplane" {
@@ -275,5 +247,9 @@ resource "google_compute_instance" "controlplane" {
 
     snapshot-approle-role-id = var.snapshot_approle_role_id
     snapshot-bucket          = google_storage_bucket.vault_snapshots.name
+
+    # Operator's one-time Vault bootstrap helper, delivered to /usr/local/bin by
+    # startup.sh. Kept a standalone file so it is reviewable and lintable.
+    bootstrap-vault-script = file("${path.module}/scripts/bootstrap-vault.sh")
   }
 }

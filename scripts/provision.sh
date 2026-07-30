@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/provision.sh
 #
-# Executed locally by Terraform's null_resource.provision via local-exec.
+# Executed locally by Terraform's terraform_data.provision via local-exec.
 # Environment variables set by Terraform:
 #   SERVER_IP    — public IPv4 of the server
 #   SSH_KEY_PATH — local path to the SSH private key
@@ -226,64 +226,22 @@ else
   log "WARNING: one or more services failed to start. Check: journalctl -u conduit -u xray -u xray-exporter -u xray-user-stats -u alloy -u nginx"
 fi
 
-# ── 8b. SPIRE agent: trust bundle + join token from the GCP SPIRE server ──────
-# Optional — only runs when GCP_SERVER_IP is set (the multi-cloud lab). The
-# agent binary, config, and unit are installed by cloud-init; here we fetch the
-# bundle + a one-time join token from the GCP SPIRE server and start the agent.
-# GCP must be deployed (SPIRE server running) before Hetzner.
+# ── 8b. WireGuard mesh + SPIRE agent (multi-cloud lab; GCP_SERVER_IP set) ─────
+# Both steps reach the GCP control plane over IAP TCP forwarding (the admin
+# channel — GCP has no public SSH), reusing the instance-metadata key. gcloud
+# tracks host keys by instance ID, so a rebuilt server does not jam on a stale
+# key the way IP-keyed ssh did. GCP must be deployed (SPIRE server running) first.
 #
-# GCP_SERVER_IP is the agent's *runtime* server address (used by cloud-init).
-# To *mint* the token we reach the server over IAP TCP forwarding, since GCP has
-# no public SSH — hence GCP_INSTANCE/GCP_ZONE (and gcloud) rather than ssh to :22.
-
+# ORDER MATTERS: the mesh comes up FIRST, because the SPIRE agent's runtime
+# server_address is now the hub's MESH IP (10.99.0.1) — the agent can only reach
+# the server once wg0 is up. Bootstrap itself (peer registration, token mint)
+# rides IAP, never the mesh, so it works before the mesh exists and after the
+# Phase-2 lockdown drops the public control-plane ports.
 if [[ -n "${GCP_SERVER_IP:-}" ]]; then
-  if remote "systemctl is-active --quiet spire-agent" 2>/dev/null; then
-    log "SPIRE agent already running — skipping attestation."
-  else
-    command -v gcloud >/dev/null || { log "ERROR: gcloud not found; required to reach the IAP-only GCP SPIRE server."; exit 1; }
-    : "${GCP_INSTANCE:?GCP_INSTANCE required to reach the GCP SPIRE server via IAP}"
-    : "${GCP_ZONE:?GCP_ZONE required to reach the GCP SPIRE server via IAP}"
-    GCP_KEY="${GCP_SSH_KEY_PATH/#\~/$HOME}"
-    log "Fetching SPIRE trust bundle + join token from GCP server ${GCP_INSTANCE} (via IAP)..."
-    # Reach the control plane through IAP TCP forwarding, reusing the existing
-    # instance-metadata key. gcloud tracks host keys by instance ID, so a rebuilt
-    # server does not jam on a stale key the way IP-keyed ssh did.
-    gcp_ssh() {
-      gcloud compute ssh "${GCP_SSH_USER}@${GCP_INSTANCE}" \
-        --zone "${GCP_ZONE}" ${GCP_PROJECT:+--project "${GCP_PROJECT}"} \
-        --tunnel-through-iap --ssh-key-file="${GCP_KEY}" \
-        --ssh-flag="-o StrictHostKeyChecking=accept-new" \
-        --ssh-flag="-o ConnectTimeout=30" \
-        --command "$1"
-    }
-
-    gcp_ssh "sudo spire-server bundle show" > "${CONTROL_DIR}/bundle.crt"
-    TOKEN=$(gcp_ssh "sudo spire-server token generate -spiffeID spiffe://${TRUST_DOMAIN}/hetzner -ttl 600" | awk '/Token:/{print $2}')
-    [[ -n "$TOKEN" ]] || { log "ERROR: failed to mint SPIRE join token from GCP server."; exit 1; }
-
-    upload "${CONTROL_DIR}/bundle.crt" "/opt/spire/agent/bootstrap.crt" "644"
-    # Compound command (umask + redirect to a root-owned path) must run wholly
-    # as root — pipe the content in and let a single sudo shell write it 0600.
-    printf 'JOIN_TOKEN_ARG=-joinToken %s\n' "$TOKEN" | $SSH -- "sudo sh -c 'umask 077; cat > /opt/spire/agent/join.env'"
-    $SSH -- "sudo sh -c 'systemctl daemon-reload && systemctl enable --now spire-agent'"
-    sleep 3
-    if remote "systemctl is-active --quiet spire-agent"; then
-      log "SPIRE agent attested and running."
-    else
-      log "WARNING: spire-agent failed to start. Check: journalctl -u spire-agent"
-    fi
-  fi
-fi
-
-# ── 8c. WireGuard mesh: register with the GCP hub and bring up wg0 ────────────
-# Optional — only in the multi-cloud lab (GCP_SERVER_IP set, i.e. the hub exists).
-# cloud-init generated this node's WG key (0600 on disk). Here we publish its
-# public key to the hub's Vault registry over IAP, receive the hub's public key +
-# endpoint + the shared PSK, write wg0.conf, and start wg-quick. The hub adds us
-# as a live peer inside wg-register-peer.sh. Reaches the hub over IAP (the admin
-# channel), never the mesh, so it works before the mesh exists and in Phase 2.
-if [[ -n "${GCP_SERVER_IP:-}" ]]; then
-  : "${GCP_INSTANCE:?}" "${GCP_ZONE:?}" "${WG_PORT:?}" "${WG_MESH_IP:?}"
+  command -v gcloud >/dev/null || { log "ERROR: gcloud not found; required to reach the IAP-only GCP control plane."; exit 1; }
+  : "${GCP_INSTANCE:?GCP_INSTANCE required to reach the GCP control plane via IAP}"
+  : "${GCP_ZONE:?GCP_ZONE required to reach the GCP control plane via IAP}"
+  : "${WG_PORT:?}" "${WG_MESH_IP:?}"
   GCP_KEY="${GCP_SSH_KEY_PATH/#\~/$HOME}"
   gcp_ssh() {
     gcloud compute ssh "${GCP_SSH_USER}@${GCP_INSTANCE}" \
@@ -293,6 +251,12 @@ if [[ -n "${GCP_SERVER_IP:-}" ]]; then
       --ssh-flag="-o ConnectTimeout=30" \
       --command "$1"
   }
+
+  # ── 8b-i. WireGuard mesh: register with the hub and bring up wg0 ────────────
+  # cloud-init generated this node's WG key (0600 on disk). Publish its public key
+  # to the hub's Vault registry over IAP, receive the hub's public key + endpoint +
+  # the shared PSK, write wg0.conf, start wg-quick. The hub adds us as a live peer
+  # inside wg-register-peer.sh.
   log "Registering WireGuard peer with the hub ${GCP_INSTANCE} (via IAP)..."
   HZ_PUB="$(remote cat /etc/wireguard/wg0.pub)"
   [[ -n "$HZ_PUB" ]] || { log "ERROR: Hetzner wg0.pub missing (cloud-init key-gen did not run)."; exit 1; }
@@ -324,6 +288,31 @@ EOF
     log "WireGuard mesh: wg0 up (hub 10.99.0.1, self ${WG_MESH_IP})."
   else
     log "WARNING: wg0 failed to come up. Check: journalctl -u wg-quick@wg0"
+  fi
+
+  # ── 8b-ii. SPIRE agent: trust bundle + join token, then start ───────────────
+  # The agent binary, config, and unit are installed by cloud-init; here we fetch
+  # the bundle + a one-time join token from the GCP SPIRE server and start the
+  # agent. It dials server_address = 10.99.0.1 (mesh) — hence AFTER the mesh above.
+  if remote "systemctl is-active --quiet spire-agent" 2>/dev/null; then
+    log "SPIRE agent already running — skipping attestation."
+  else
+    log "Fetching SPIRE trust bundle + join token from GCP server ${GCP_INSTANCE} (via IAP)..."
+    gcp_ssh "sudo spire-server bundle show" > "${CONTROL_DIR}/bundle.crt"
+    TOKEN=$(gcp_ssh "sudo spire-server token generate -spiffeID spiffe://${TRUST_DOMAIN}/hetzner -ttl 600" | awk '/Token:/{print $2}')
+    [[ -n "$TOKEN" ]] || { log "ERROR: failed to mint SPIRE join token from GCP server."; exit 1; }
+
+    upload "${CONTROL_DIR}/bundle.crt" "/opt/spire/agent/bootstrap.crt" "644"
+    # Compound command (umask + redirect to a root-owned path) must run wholly
+    # as root — pipe the content in and let a single sudo shell write it 0600.
+    printf 'JOIN_TOKEN_ARG=-joinToken %s\n' "$TOKEN" | $SSH -- "sudo sh -c 'umask 077; cat > /opt/spire/agent/join.env'"
+    $SSH -- "sudo sh -c 'systemctl daemon-reload && systemctl enable --now spire-agent'"
+    sleep 3
+    if remote "systemctl is-active --quiet spire-agent"; then
+      log "SPIRE agent attested and running."
+    else
+      log "WARNING: spire-agent failed to start. Check: journalctl -u spire-agent"
+    fi
   fi
 fi
 

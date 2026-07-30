@@ -225,3 +225,9 @@ variable "wg_mesh_ip" {
   type        = string
   default     = "10.99.0.2"
 }
+
+variable "wg_hub_ip" {
+  description = "The GCP control plane's fixed address on the WireGuard mesh. The SPIRE agent dials the server here (over wg0), so cross-node control-plane traffic rides the mesh rather than the public IP. Must match the GCP hub's mesh address."
+  type        = string
+  default     = "10.99.0.1"
+}

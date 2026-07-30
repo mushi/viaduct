@@ -1,6 +1,8 @@
 # Namespaces + RBAC for the AWS node.
-# spire ns: SA + token for the host agent's k8s WorkloadAttestor (kubelet /pods);
-#   startup.sh decodes the Secret to /opt/spire/conf/agent/k8s-sa-token.
+# spire ns: SA for the host agent's k8s WorkloadAttestor (kubelet /pods). startup.sh
+# mints a short-lived SA token (kubectl create token, 24h)
+# into /opt/spire/conf/agent/k8s-sa-token and a systemd timer rotates it.
+# The ClusterRole below is what the minted token carries (read-only pods/nodes).
 # viaduct ns: workloads (conduit, alloy). SA vault-agent maps via a SPIRE entry to
 #   spiffe://viaduct.aws/vault-agent, which GCP Vault's cert-auth trusts.
 ---
@@ -26,15 +28,6 @@ metadata: { name: spire-agent-kubelet }
 roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: spire-agent-kubelet }
 subjects:
 - { kind: ServiceAccount, name: spire-agent, namespace: spire }
----
-# Long-lived SA token for the host k8s WorkloadAttestor (k8s 1.24+ needs an explicit Secret; it's read-only, 0600 root).
-apiVersion: v1
-kind: Secret
-metadata:
-  name: spire-agent-token
-  namespace: spire
-  annotations: { kubernetes.io/service-account.name: spire-agent }
-type: kubernetes.io/service-account-token
 ---
 apiVersion: v1
 kind: Namespace

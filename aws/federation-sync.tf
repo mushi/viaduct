@@ -11,11 +11,11 @@ data "terraform_remote_state" "gcp" {
   config  = { path = "${path.module}/../gcp/terraform.tfstate" }
 }
 
-resource "null_resource" "federation_bundle_to_gcp" {
-  # aws_instance.spire.id changes only on a rebuild (user_data_replace_on_change),
+resource "terraform_data" "federation_bundle_to_gcp" {
+  # aws_instance.spire.id changes only on a rebuild (terraform apply -replace),
   # so this fires exactly when federation breaks, not on ordinary applies or on
   # ca_ttl rotations (which https_spiffe handles on its own).
-  triggers = {
+  triggers_replace = {
     aws_instance_id = aws_instance.spire.id
   }
 
@@ -23,7 +23,9 @@ resource "null_resource" "federation_bundle_to_gcp" {
     command     = "${path.module}/scripts/push-bundle-to-gcp.sh"
     interpreter = ["/usr/bin/env", "bash"]
     environment = {
-      AWS_BUNDLE_URL   = "https://${aws_eip.spire.public_ip}:${var.bundle_endpoint_port}"
+      # The GCP box curls this URL to import the bundle. Post-lockdown the AWS node
+      # has no public :8443, so GCP fetches over the mesh (10.99.0.3) via wg0.
+      AWS_BUNDLE_URL   = "https://${var.wg_mesh_ip}:${var.bundle_endpoint_port}"
       AWS_TRUST_DOMAIN = var.trust_domain
       GCP_INSTANCE     = data.terraform_remote_state.gcp.outputs.instance_name
       GCP_ZONE         = data.terraform_remote_state.gcp.outputs.zone
@@ -33,5 +35,7 @@ resource "null_resource" "federation_bundle_to_gcp" {
     }
   }
 
-  depends_on = [aws_instance.spire, aws_eip.spire]
+  # wg_mesh_join must run first: GCP reaches AWS at 10.99.0.3 only once this node's
+  # wg0 is up and registered with the hub.
+  depends_on = [aws_instance.spire, aws_eip.spire, terraform_data.wg_mesh_join]
 }

@@ -14,8 +14,8 @@ output "zone" {
 }
 
 output "vault_addr" {
-  description = "Vault API address. Set VAULT_ADDR to this; the listener cert is self-signed (VAULT_CACERT=/opt/vault/tls/vault.crt on the node)."
-  value       = "https://${google_compute_address.controlplane.address}:8200"
+  description = "Vault API address on the WireGuard mesh (public :8200 is closed post-lockdown; reach it as a mesh peer). Set VAULT_ADDR to this; the listener cert lists 10.99.0.1 in its SANs, so verification succeeds with VAULT_CACERT set to the node's /opt/vault/tls/vault.crt."
+  value       = "https://10.99.0.1:8200"
 }
 
 output "service_account_email" {

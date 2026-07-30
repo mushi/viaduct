@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Poll the GCP control-plane instance over IAP until Vault is unsealed and the
 # SPIRE server is active, then print a confirmation. Invoked by
-# null_resource.controlplane_ready so `terraform apply` blocks until the control
+# terraform_data.controlplane_ready so `terraform apply` blocks until the control
 # plane is genuinely ready, rather than returning when the instance resource is
 # merely created/modified. Read-only: it never changes the instance.
 #

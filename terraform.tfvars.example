@@ -1,5 +1,5 @@
 # Copy to terraform.tfvars and fill in your values.
-# terraform.tfvars is gitignored — do not commit it.
+# terraform.tfvars is gitignored, do not commit it.
 
 # ── Required ──────────────────────────────────────────────────────────────────
 hcloud_token         = "your-hetzner-api-token-here"
@@ -7,13 +7,13 @@ ssh_public_key       = "ssh-ed25519 AAAA... your-deploy-key-here"
 ssh_private_key_path = "~/.ssh/id_ed25519"
 ops_ssh_public_key   = "ssh-ed25519 AAAA... your-ops-key-here"   # separate keypair for the interactive `ops` user
 
-# Required — no default (fails closed). Restrict SSH to your own IP /32.
+# Required, no default (fails closed). Restrict SSH to your own IP /32.
 # Find it with curl ifconfig.me/ip, then set it here or export
 # TF_VAR_admin_cidr='["203.0.113.10/32"]'
 # admin_cidr = ["203.0.113.10/32"]
 
 # ── VLESS users ───────────────────────────────────────────────────────────────
-# Add/remove names and re-apply — no server rebuild needed.
+# Add/remove names and re-apply, no server rebuild needed.
 # Names: alphanumeric, hyphens, underscores only.
 vless_users = ["alice", "bob"]
 
@@ -30,6 +30,10 @@ grafana_cloud_api_key = "glc_eyJ..."
 # Permissions needed: Zone:DNS:Edit for your vless_domain zone.
 cloudflare_api_token = "your-cloudflare-api-token-here"
 
+# Public domain for the XHTTP/TLS inbound (Let's Encrypt via Cloudflare DNS-01).
+# Point a Cloudflare A record at this server, DNS-only (grey cloud, unproxied).
+vless_domain = "example.com"
+
 # ── Optional overrides ────────────────────────────────────────────────────────
 
 # location            = "nbg1"              # nbg1 fsn1 hel1 ash sin
@@ -39,9 +43,9 @@ cloudflare_api_token = "your-cloudflare-api-token-here"
 # conduit_cpu_quota   = "60%"
 # xray_version        = "v26.4.25"
 # xray_exporter_version = "v0.2.0"
-# vless_sni           = "microsoft.com"
-# vless_domain        = "example.com"        # domain for XHTTP TLS cert + XHTTP URI; A record must be DNS-only (unproxied)
+# vless_sni           = "microsoft.com"      # SNI the Reality inbound impersonates
 # alloy_version       = "v1.8.3"
+# ops_ssh_key_path    = "~/.ssh/viaduct_ops" # local ops private key, for ssh -i to ops@
 
 # ── Binary checksums (required) ───────────────────────────────────────────────
 # Run: ./scripts/get-checksums.sh
@@ -51,9 +55,9 @@ cloudflare_api_token = "your-cloudflare-api-token-here"
 conduit_sha256       = ""   # obtain via scripts/get-checksums.sh
 xray_zip_sha256      = ""   # obtain via scripts/get-checksums.sh
 alloy_zip_sha256     = ""   # obtain via scripts/get-checksums.sh
-xray_exporter_sha256 = ""   # obtain via scripts/get-checksums.sh (no upstream checksums file — pinned here)
+xray_exporter_sha256 = ""   # obtain via scripts/get-checksums.sh (no upstream checksums file, pinned here)
 
-# ── SPIRE agent (multi-cloud lab — optional) ──────────────────────────────────
+# ── SPIRE agent (multi-cloud lab, optional) ──────────────────────────────────
 # This node attests (join_token) to the SPIRE server in the gcp/ root. Deploy
 # gcp/ FIRST, then set enable_spire = true. The server IP, instance name, and
 # zone are read automatically from the gcp/ root's remote state (gcp/
@@ -67,3 +71,8 @@ xray_exporter_sha256 = ""   # obtain via scripts/get-checksums.sh (no upstream c
 # gcp_ssh_key_path     = "~/.ssh/viaduct_lab"
 # gcp_ssh_user         = "viaduct"
 # trust_domain         = "viaduct.gcp"
+
+# ── WireGuard mesh (multi-cloud lab, optional) ────────────────────────────────
+# wg_port    = 51820          # hub UDP port (must match gcp/ wg_port)
+# wg_mesh_ip = "10.99.0.2"    # this node's mesh address
+# wg_hub_ip  = "10.99.0.1"    # GCP hub's mesh address (the SPIRE agent dials it here)

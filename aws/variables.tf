@@ -36,12 +36,6 @@ variable "bundle_endpoint_port" {
   default     = 8443
 }
 
-variable "federation_cidrs" {
-  description = "CIDR(s) allowed to reach the federation bundle endpoint: the GCP SPIRE server's IP /32. Empty disables the rule until known."
-  type        = list(string)
-  default     = []
-}
-
 variable "trust_domain" {
   description = "SPIFFE trust domain for the AWS SPIRE server."
   type        = string
@@ -69,7 +63,7 @@ variable "gcp_control_plane_ip" {
 }
 
 # ── GCP access for federation bundle sync (over IAP) ──────────────────────────
-# Used only by the federation-sync null_resource to push this node's trust bundle
+# Used only by the federation-sync terraform_data to push this node's trust bundle
 # to the GCP SPIRE server after a rebuild. Instance name + zone come from the gcp/
 # root's remote state; these are the local key and user for the IAP tunnel.
 
@@ -103,6 +97,12 @@ variable "wg_mesh_ip" {
   description = "This node's fixed address on the 10.99.0.0/24 WireGuard mesh (hub is 10.99.0.1, Hetzner 10.99.0.2)."
   type        = string
   default     = "10.99.0.3"
+}
+
+variable "wg_hub_ip" {
+  description = "The GCP control plane's fixed address on the WireGuard mesh. Cross-cloud control-plane traffic (SPIRE federation :8443, Vault :8200, Alloy) dials the hub here over wg0 rather than the public IP. The WG endpoint itself still dials gcp_control_plane_ip:wg_port (you cannot bootstrap the mesh over the mesh). Must match the GCP hub's mesh address."
+  type        = string
+  default     = "10.99.0.1"
 }
 
 variable "wg_psk_parameter" {

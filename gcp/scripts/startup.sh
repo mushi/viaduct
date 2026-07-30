@@ -25,6 +25,21 @@ VAULT_VERSION="$(md instance/attributes/vault-version)"
 VAULT_IP="$(md instance/attributes/vault-addr-ip)"
 PROJECT="$(md project/project-id)"
 
+# Hub address on the private WireGuard mesh (10.99.0.0/24). A fixed architectural
+# constant — spokes dial the hub here once public control-plane ingress is dropped,
+# so it must be in the Vault listener cert SANs (§3) and is the hub's wg0 address (§8).
+WG_HUB_MESH_IP="10.99.0.1"
+
+# Install the operator's one-time Vault bootstrap helper (run once after
+# `vault operator init`; see the runbook). Shipped via metadata so it stays a
+# standalone, reviewable file in gcp/scripts/. Absent on standalone deploys.
+BVS="$(md instance/attributes/bootstrap-vault-script || true)"
+if [ -n "$BVS" ]; then
+  printf '%s' "$BVS" > /usr/local/bin/bootstrap-vault.sh
+  chmod 0755 /usr/local/bin/bootstrap-vault.sh
+fi
+unset BVS
+
 # ── 1. No swap (deliberate) ──────────────────────────────────────────────────
 # With mlock disabled (see vault.hcl), swap would be a path for in-memory
 # secrets to reach the disk in plaintext. zram (RAM-backed swap) is unavailable
@@ -44,15 +59,16 @@ if ! command -v vault >/dev/null 2>&1; then
   apt-mark hold vault
 fi
 
-# ── 3. TLS for the Vault listener (self-signed; SAN = the static IP) ─────────
+# ── 3. TLS for the Vault listener (self-signed; SAN = static IP + mesh IP) ────
 # Agents trust this cert as their VAULT_CACERT. The static IP keeps the SAN
-# stable across instance rebuilds.
+# stable across instance rebuilds; the mesh IP (10.99.0.1) lets cross-node
+# clients verify Vault over the WireGuard overlay once public :8200 is dropped.
 mkdir -p /opt/vault/tls
 if [ ! -f /opt/vault/tls/vault.crt ]; then
   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
     -keyout /opt/vault/tls/vault.key -out /opt/vault/tls/vault.crt -days 3650 \
     -subj "/CN=viaduct-vault" \
-    -addext "subjectAltName=IP:${VAULT_IP},IP:127.0.0.1"
+    -addext "subjectAltName=IP:${VAULT_IP},IP:${WG_HUB_MESH_IP},IP:127.0.0.1"
 fi
 
 # ── 4. Vault config: Raft storage + GCP KMS auto-unseal ──────────────────────
@@ -152,7 +168,7 @@ if [ "$VAULT_INITIALISED" = "false" ] && gcloud storage ls "gs://$BUCKET/vault.s
 
   # Vault: init a fresh cluster for a temporary root token, then restore the
   # snapshot (which invalidates that token). KMS auto-unseal re-applies to the
-  # restored data. Mirrors RESTORE.md.
+  # restored data. This is the automatic recovery path (see docs/RUNBOOK.md).
   TMP_ROOT="$(vault operator init -format=json | jq -r '.root_token')"
   gcloud storage cp "gs://$BUCKET/vault.snap" /tmp/vault.snap
   VAULT_TOKEN="$TMP_ROOT" vault operator raft snapshot restore -force /tmp/vault.snap
@@ -379,16 +395,16 @@ CERTROLE
 chmod 0755 /usr/local/bin/refresh-aws-certrole.sh
 
 # ── 8. WireGuard hub (private mesh overlay) ───────────────────────────────────
-# This node is the mesh hub: it listens on WG_PORT and Hetzner/AWS/the admin
-# laptop dial in (spokes need no inbound port). The hub key is DURABLE in Vault
+# This node is the mesh hub: it listens on WG_PORT and Hetzner/AWS/the operator
+# dial in (spokes need no inbound port). The hub key is DURABLE in Vault
 # (kv/wireguard/hub): generated once on the first bootstrapped boot, then fetched
 # on every boot into a tmpfs credential (/run), so the hub PUBLIC key is stable
 # across rebuilds (spokes never have to re-learn it) and the private key never
 # touches the persistent disk. ip_forward lets the hub route spoke-to-spoke
 # traffic. Peers are added later by the mesh distribution step.
-apt-get install -y wireguard-tools sqlite3
+apt-get install -y wireguard-tools sqlite3 iptables
 
-WG_ADDR="10.99.0.1/24"                          # hub address on the 10.99.0.0/24 mesh
+WG_ADDR="${WG_HUB_MESH_IP}/24"                  # hub address on the 10.99.0.0/24 mesh (defined once at top)
 WG_PORT="$(md instance/attributes/wg-port)"
 WG_RUN_KEY="/run/wireguard/wg0.key"             # tmpfs (RAM); cleared on reboot, rewritten each boot
 mkdir -p /etc/wireguard && chmod 0700 /etc/wireguard
@@ -501,6 +517,15 @@ DROPIN
   # registry (no spokes yet) or a transient Vault hiccup must not abort startup,
   # since wg0 itself is already up.
   /usr/local/bin/wg-sync-peers.sh || echo "WireGuard hub: peer reconcile deferred (empty registry or Vault not ready)."
+
+  # MSS clamp for TCP the hub FORWARDS between mesh peers (laptop or spoke to a
+  # spoke). Large segments black-hole when path-MTU discovery fails across the
+  # tunnel; clamping the SYN's MSS to the path MTU fixes it. Applied here (not as a
+  # wg-quick PostUp) and idempotently (-C guard), so it never gates the hub's wg0
+  # bringup — a broken clamp must not take the whole mesh down.
+  iptables -t mangle -C FORWARD -o wg0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null \
+    || iptables -t mangle -A FORWARD -o wg0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu \
+    || echo "WireGuard hub: MSS clamp not applied (iptables unavailable); large forwarded segments may need PMTU."
 else
   echo "WireGuard hub: Vault not bootstrapped yet (wireguard-hub role/kv absent); deferring wg0 to the next boot after BOOTSTRAP."
 fi

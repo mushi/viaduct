@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # aws/scripts/crosscloud-refresh.sh
 #
-# Runs locally via Terraform (null_resource.crosscloud_refresh) on every aws/ apply.
+# Runs locally via Terraform (terraform_data.crosscloud_refresh) on every aws/ apply.
 # Keeps the AWS node's view of GCP Vault's listener cert current WITHOUT a hardcoded
 # fingerprint and WITHOUT rebuilding the instance:
 #   1. read GCP's CURRENT vault.crt fingerprint from the GCP box over IAP (trusted,
@@ -16,7 +16,7 @@ set -euo pipefail
 
 : "${AWS_REGION:?}"
 : "${AWS_INSTANCE_ID:?}"
-: "${GCP_HUB_IP:?}"
+: "${GCP_MESH_IP:?}"
 : "${GCP_TRUST_DOMAIN:?}"
 : "${GCP_INSTANCE:?}"
 : "${GCP_ZONE:?}"
@@ -76,7 +76,7 @@ log "Writing crosscloud.env and running the bootstrap over SSM..."
 REMOTE="$(cat <<REOF
 set -e
 cat > /opt/viaduct/crosscloud.env <<CCENV
-GCP_IP=${GCP_HUB_IP}
+GCP_IP=${GCP_MESH_IP}
 GCP_FP=${GCP_FP}
 GCP_TRUST_DOMAIN=${GCP_TRUST_DOMAIN}
 CCENV

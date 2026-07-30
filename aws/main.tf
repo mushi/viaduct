@@ -71,22 +71,16 @@ resource "aws_route_table_association" "viaduct" {
 # ─── Security group ──────────────────────────────────────────────────────────
 resource "aws_security_group" "spire" {
   name        = "viaduct-aws-sg"
-  description = "Viaduct AWS node: SSH + SPIRE federation bundle endpoint"
+  description = "Viaduct AWS node: SSH + SPIRE federation bundle endpoint" # immutable; change forces a replace
   vpc_id      = aws_vpc.viaduct.id
   tags        = { Name = "viaduct-aws-sg" }
 }
 
-# SPIRE federation bundle endpoint (HTTPS), reached by the GCP SPIRE server.
-# Created only once federation_cidrs is non-empty (GCP server IP known).
-resource "aws_vpc_security_group_ingress_rule" "federation" {
-  for_each          = toset(var.federation_cidrs)
-  security_group_id = aws_security_group.spire.id
-  description       = "SPIRE federation bundle endpoint"
-  ip_protocol       = "tcp"
-  from_port         = var.bundle_endpoint_port
-  to_port           = var.bundle_endpoint_port
-  cidr_ipv4         = each.value
-}
+# No inbound rules by design. The SPIRE federation bundle endpoint (8443) listens
+# on 0.0.0.0 but GCP fetches it over the WireGuard mesh (10.99.0.3): mesh packets
+# arrive decrypted on wg0, which the security group never sees, so no ingress rule
+# is needed. Admin is over SSM (outbound). Re-exposing 8443 publicly requires adding
+# a new ingress rule here (a reviewable change), not flipping a variable.
 
 resource "aws_vpc_security_group_egress_rule" "all" {
   security_group_id = aws_security_group.spire.id
@@ -220,27 +214,20 @@ resource "aws_instance" "spire" {
   # single-sourced from k8s/ and scripts/ (injected verbatim via file()).
   # gzip'd: rendered script exceeds the 16 KB user_data cap; cloud-init decompresses.
   user_data_base64 = base64gzip(templatefile("${path.module}/scripts/startup.sh.tpl", {
-    region               = var.region
-    gcp_control_plane_ip = var.gcp_control_plane_ip
-    trust_domain         = var.trust_domain
-    gcp_trust_domain     = var.gcp_trust_domain
-    spire_version        = var.spire_version
-    spire_sha256         = var.spire_sha256
-    k3s_version          = var.k3s_version
-    k8s_rbac             = file("${path.module}/k8s/00-namespaces-rbac.yaml")
-    k8s_csi              = file("${path.module}/k8s/01-spiffe-csi-driver.yaml")
-    k8s_conduit          = file("${path.module}/k8s/10-conduit.yaml")
-    k8s_alloy            = file("${path.module}/k8s/20-alloy.yaml")
-    guardrail_script     = file("${path.module}/scripts/egress-guardrail.sh")
-    crosscloud_script    = file("${path.module}/scripts/crosscloud-bootstrap.sh")
+    region            = var.region
+    wg_hub_ip         = var.wg_hub_ip
+    trust_domain      = var.trust_domain
+    gcp_trust_domain  = var.gcp_trust_domain
+    spire_version     = var.spire_version
+    spire_sha256      = var.spire_sha256
+    k3s_version       = var.k3s_version
+    k8s_rbac          = file("${path.module}/k8s/00-namespaces-rbac.yaml")
+    k8s_csi           = file("${path.module}/k8s/01-spiffe-csi-driver.yaml")
+    k8s_conduit       = file("${path.module}/k8s/10-conduit.yaml")
+    k8s_alloy         = file("${path.module}/k8s/20-alloy.yaml")
+    guardrail_script  = file("${path.module}/scripts/egress-guardrail.sh")
+    crosscloud_script = file("${path.module}/scripts/crosscloud-bootstrap.sh")
   }))
-  # Changing user_data relaunches the instance. Acceptable here, but note what
-  # actually survives: the CA private keys persist in KMS, yet the CA journal lives
-  # in the ephemeral sqlite datastore, so a rebuild mints a FRESH viaduct.aws CA
-  # and the trust bundle changes (the old KMS keys orphan and auto-prune). The
-  # federation-sync null_resource re-pushes the new bundle to GCP.
-  user_data_replace_on_change = true
-
   # IMDSv2 required (token-based) — aws_iid fetches the identity document here.
   metadata_options {
     http_tokens   = "required"
@@ -254,6 +241,19 @@ resource "aws_instance" "spire" {
   }
 
   tags = { Name = var.instance_name }
+
+  # Uniform -replace model across all three roots (GCP, Hetzner, AWS): a boot-script
+  # edit never auto-rebuilds. ignore_changes on user_data_base64 mirrors Hetzner's
+  # ignore_changes=[user_data], so a plain apply ignores startup-script drift. To
+  # apply an edited startup script, rebuild explicitly:
+  #   terraform apply -replace=aws_instance.spire
+  # What survives a rebuild: the CA private keys persist in KMS, but the CA journal
+  # lives in the ephemeral sqlite datastore, so a rebuild mints a FRESH viaduct.aws
+  # CA and the trust bundle changes (the old KMS keys orphan and auto-prune). The
+  # federation-sync terraform_data re-pushes the new bundle to GCP.
+  lifecycle {
+    ignore_changes = [user_data_base64]
+  }
 }
 
 resource "aws_eip_association" "spire" {

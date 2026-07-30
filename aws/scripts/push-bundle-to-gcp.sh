@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Fetch the AWS SPIRE server's trust bundle and set it on the GCP SPIRE server, so
 # GCP re-trusts viaduct.aws after an AWS rebuild (a fresh datastore mints a new CA,
-# so the bundle changes). The fetch runs ON the GCP box, the only host that
-# federation_cidrs lets reach AWS :8443, and pipes straight into
+# so the bundle changes). The fetch runs ON the GCP box, which reaches AWS :8443
+# over the WireGuard mesh (10.99.0.3) post-lockdown, and pipes straight into
 # `spire-server bundle set`, all over one IAP session. The bundle is a CA cert
 # (public); this only writes GCP's copy of the peer bundle, and touches nothing on
 # AWS. https_spiffe federation self-heals normal ca_ttl rotations on its own; this

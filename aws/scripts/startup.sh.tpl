@@ -16,7 +16,12 @@ log() { echo "[viaduct-startup] $(date -u +%H:%M:%S) $*"; }
 
 # ─── Terraform-injected values (the only templatefile tokens in this script) ──
 REGION="${region}"
-GCP_IP="${gcp_control_plane_ip}"
+# GCP_IP is the hub's MESH address (10.99.0.1): SPIRE federation (:8443), the Vault
+# CA fetch (:8200) and Alloy's cross-cloud Vault auth all ride wg0, not the public
+# IP. The WG endpoint itself dials the public IP — that lives in wg-mesh-join.sh,
+# not here. First-boot federation retries until this node's mesh is up (post-boot
+# provisioner), then converges.
+GCP_IP="${wg_hub_ip}"
 TRUST_DOMAIN="${trust_domain}"
 GCP_TRUST_DOMAIN="${gcp_trust_domain}"
 SPIRE_VERSION="${spire_version}"
@@ -129,14 +134,56 @@ K8S_ALLOY
 sed -i "s|__GCP_CONTROL_PLANE_IP__|$GCP_IP|g" /opt/viaduct/k8s/20-alloy.yaml
 $KUBECTL apply -f /opt/viaduct/k8s/00-namespaces-rbac.yaml
 
-# ─── 6. SPIRE agent: aws_iid + unix + k8s (kubelet via the SA token) ──────────
+# ─── 6. SPIRE agent: aws_iid + unix + k8s (kubelet via a rotated SA token) ────
 spire-server bundle show > /opt/spire/conf/agent/bootstrap.crt
-# kubelet SA token for the k8s WorkloadAttestor
-for i in $(seq 1 15); do
-  TOKEN=$($KUBECTL get secret spire-agent-token -n spire -o jsonpath='{.data.token}' 2>/dev/null | base64 -d)
-  [ -n "$TOKEN" ] && break; sleep 2
+
+# Short-lived, rotated kubelet SA token for the k8s WorkloadAttestor — no standing
+# Secret. A oneshot mints a 24h token (kubectl create token, via the node's k3s
+# admin kubeconfig) and atomically rewrites the 0600-root token file; a timer
+# rotates it every 12h, well inside the 24h TTL. The agent's k8s attestor uses the
+# secure kubelet client, which re-reads token_path on its reload_interval (~1m), so
+# a rotated file is picked up with no agent restart and no attestation gap.
+install -m0755 /dev/stdin /usr/local/sbin/spire-agent-token.sh <<'MINT'
+#!/usr/bin/env bash
+set -euo pipefail
+DEST=/opt/spire/conf/agent/k8s-sa-token
+for i in $(seq 1 10); do
+  if TOKEN=$(/usr/local/bin/k3s kubectl create token spire-agent -n spire --duration=24h 2>/dev/null) && [ -n "$TOKEN" ]; then
+    umask 077
+    tmp=$(mktemp "$DEST.XXXXXX")
+    printf '%s' "$TOKEN" > "$tmp"
+    mv -f "$tmp" "$DEST"   # atomic swap; the attestor never reads a half-written file
+    exit 0
+  fi
+  sleep 3
 done
-umask 077; printf '%s' "$TOKEN" > /opt/spire/conf/agent/k8s-sa-token; umask 022
+echo "spire-agent-token: failed to mint SA token" >&2
+exit 1
+MINT
+cat > /etc/systemd/system/spire-agent-token.service <<'EOF'
+[Unit]
+Description=Mint + rotate the SPIRE agent's k8s WorkloadAttestor SA token
+After=k3s.service
+Wants=k3s.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/spire-agent-token.sh
+EOF
+cat > /etc/systemd/system/spire-agent-token.timer <<'EOF'
+[Unit]
+Description=Rotate the SPIRE agent k8s SA token (well inside its 24h TTL)
+[Timer]
+# Re-mint shortly after boot — the root disk survives stop/start, so a persisted
+# token could be expired on restart and would block k8s attestation until the next
+# rotation — then every 12h thereafter.
+OnBootSec=1min
+OnUnitActiveSec=12h
+[Install]
+WantedBy=timers.target
+EOF
+systemctl daemon-reload
+systemctl start spire-agent-token.service   # initial mint, before the agent starts
+systemctl enable --now spire-agent-token.timer
 
 cat > /opt/spire/conf/agent/agent.conf <<EOF
 agent {
@@ -165,8 +212,10 @@ EOF
 cat > /etc/systemd/system/spire-agent.service <<'EOF'
 [Unit]
 Description=SPIRE Agent (viaduct.aws, aws_iid)
-After=spire-server.service network-online.target
-Wants=network-online.target
+After=spire-server.service spire-agent-token.service network-online.target
+# Pull a fresh token mint before the agent on every boot (weak dep: if k3s/mint is
+# slow the agent still starts and picks up the token on the timer + next reload).
+Wants=network-online.target spire-agent-token.service
 [Service]
 RuntimeDirectory=spire-agent
 ExecStart=/opt/spire/bin/spire-agent run -config /opt/spire/conf/agent/agent.conf

@@ -1,15 +1,27 @@
-region = "ap-south-1" # Mumbai
+# Copy to terraform.tfvars and fill in your values.
+# terraform.tfvars is gitignored, do not commit it.
 
-# GCP SPIRE server IP /32, added in A3 once federation is wired. Empty disables
-# the bundle-endpoint ingress rule.
-federation_cidrs = []
+# ── Required ──────────────────────────────────────────────────────────────────
+region               = "ap-south-1"    # t4g free-trial eligible (Mumbai)
+gcp_control_plane_ip = "203.0.113.10"  # GCP node's PUBLIC IP (the WireGuard endpoint this spoke dials). Deploy gcp/ first.
 
-trust_domain = "viaduct.aws"
-
-# SPIRE server (filled in A2). NOTE: arm64 tarball for Graviton.
+# SPIRE server: arm64 tarball for Graviton (NOTE: arm64, not amd64)
 spire_version = "1.15.1"
 spire_sha256  = "<sha256 of spire-1.15.1-linux-arm64-musl.tar.gz>"
 
-# Cross-cloud federation (deploy gcp/ first to obtain these)
-gcp_control_plane_ip  = "203.0.113.10"   # GCP control-plane IP (Vault :8200 + SPIRE bundle :8443)
-gcp_project          = ""                    # empty uses gcloud's active project
+# ── Optional (defaults shown; uncomment to override) ──────────────────────────
+# gcp_project          = ""                     # empty uses gcloud's active project
+# gcp_ssh_user         = "viaduct"              # federation-sync IAP tunnel to GCP
+# gcp_ssh_key_path     = "~/.ssh/viaduct_lab"
+# gcp_trust_domain     = "viaduct.gcp"          # peer trust domain to federate with
+# trust_domain         = "viaduct.aws"
+# instance_type        = "t4g.small"            # free-trial eligible through 2026-12-31
+# instance_name        = "viaduct-aws-node"
+# vpc_cidr             = "10.20.0.0/24"
+# root_volume_gb       = 30
+# bundle_endpoint_port = 8443                   # SPIRE federation bundle endpoint (mesh-only)
+# k3s_version          = "v1.35.5+k3s1"
+# wg_port              = 51820                  # hub UDP port (must match gcp/ wg_port)
+# wg_mesh_ip           = "10.99.0.3"            # this spoke's mesh address
+# wg_hub_ip            = "10.99.0.1"            # GCP hub's mesh address (control-plane target)
+# wg_psk_parameter     = "/viaduct/wg/aws-psk"  # SSM SecureString name for the PSK relay

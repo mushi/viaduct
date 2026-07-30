@@ -874,7 +874,7 @@ runcmd:
     agent {
       data_dir          = "/opt/spire/agent/data"
       log_level         = "INFO"
-      server_address    = "${gcp_spire_server_ip}"
+      server_address    = "${spire_server_address}"
       server_port       = "8081"
       trust_domain      = "${trust_domain}"
       trust_bundle_path = "/opt/spire/agent/bootstrap.crt"

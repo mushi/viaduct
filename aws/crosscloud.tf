@@ -6,8 +6,8 @@
 # `terraform apply` here — a refresh, not an AWS instance rebuild. always_run makes
 # that post-GCP-rebuild apply pick up the new cert; the bootstrap is idempotent when
 # nothing changed. data.terraform_remote_state.gcp is declared in federation-sync.tf.
-resource "null_resource" "crosscloud_refresh" {
-  triggers = {
+resource "terraform_data" "crosscloud_refresh" {
+  triggers_replace = {
     always_run = timestamp()
   }
 
@@ -17,7 +17,7 @@ resource "null_resource" "crosscloud_refresh" {
     environment = {
       AWS_REGION       = var.region
       AWS_INSTANCE_ID  = aws_instance.spire.id
-      GCP_HUB_IP       = var.gcp_control_plane_ip
+      GCP_MESH_IP      = var.wg_hub_ip
       GCP_TRUST_DOMAIN = var.gcp_trust_domain
 
       GCP_INSTANCE     = data.terraform_remote_state.gcp.outputs.instance_name
@@ -28,5 +28,8 @@ resource "null_resource" "crosscloud_refresh" {
     }
   }
 
-  depends_on = [aws_instance.spire]
+  # Must run AFTER the mesh is up: crosscloud-bootstrap now dials the hub's mesh IP
+  # (GCP_MESH_IP → crosscloud.env GCP_IP) for the federation bundle + Vault CA, so
+  # wg0 has to exist first. wg_mesh_join brings it up.
+  depends_on = [aws_instance.spire, terraform_data.wg_mesh_join]
 }

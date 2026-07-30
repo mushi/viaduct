@@ -1,5 +1,5 @@
 output "instance_public_ip" {
-  description = "Stable Elastic IP of the AWS node (SPIRE bundle-endpoint + Conduit address; admin is via SSM, not SSH)."
+  description = "Stable Elastic IP of the AWS node (Conduit address; admin is via SSM, not SSH)."
   value       = aws_eip.spire.public_ip
 }
 
@@ -14,8 +14,8 @@ output "ssm_session" {
 }
 
 output "bundle_endpoint_url" {
-  description = "SPIRE federation bundle endpoint the GCP server fetches."
-  value       = "https://${aws_eip.spire.public_ip}:${var.bundle_endpoint_port}"
+  description = "SPIRE federation bundle endpoint the GCP server fetches, over the WireGuard mesh (public :8443 is closed post-lockdown)."
+  value       = "https://${var.wg_mesh_ip}:${var.bundle_endpoint_port}"
 }
 
 output "iam_role_arn" {
