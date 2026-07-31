@@ -71,7 +71,10 @@ gcloud compute ssh viaduct-controlplane --zone <zone> --project <project> --tunn
 On the box:
 
 ```sh
-export VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/opt/vault/tls/vault.crt
+# Skip-verify is correct here: this is loopback to the co-located Vault (no MITM), and the
+# self-signed cert is root-owned so a non-root operator cannot read it. Remote clients verify.
+unset VAULT_CACERT   # vault loads it even with skip-verify; clear any lingering value
+export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true
 vault operator init          # STORE the recovery keys AND the root token OFFLINE (e.g. a password manager)
 export VAULT_TOKEN=<root-token-from-init>
 sudo -E /usr/local/bin/bootstrap-vault.sh
@@ -82,23 +85,23 @@ sudo -E /usr/local/bin/bootstrap-vault.sh
 gcp-auth admin/restore/wireguard roles, brings SPIRE and the WireGuard hub up, and revokes
 the root token. It is idempotent and safe to re-run.
 
-Then take your standing login and seed the one secret Vault delivers cross-cloud (the AWS
-node's Alloy token):
+Then take your standing login and seed the workload secrets. Each node fetches its own set
+from Vault via its SPIRE SVID (AWS Alloy, and Hetzner's Grafana + Cloudflare):
 
 ```sh
 vault login -method=gcp role=admin type=gce      # your login from here on; there is no standing root token
-vault kv put kv/aws/grafana prometheus_url=<url> prometheus_user=<user> api_key=<metrics:write-token>
+vault kv put kv/aws/grafana        prometheus_url=<url> prometheus_user=<user> api_key=<metrics:write-token>
+vault kv put kv/hetzner/grafana    prometheus_url=<url> prometheus_user=<user> api_key=<metrics:write-token>
+vault kv put kv/hetzner/cloudflare  api_token=<cloudflare-zone-dns-edit-token>
 ```
-
-Hetzner's Grafana and Cloudflare secrets are supplied through its own tfvars in step 3, not
-Vault.
 
 ### 3. Hetzner data plane
 
 ```sh
 cd ..            # repo root
 cp terraform.tfvars.example terraform.tfvars
-# Fill it in: admin_cidr (your IP /32), the Grafana + Cloudflare tokens, VLESS users.
+# Fill it in: admin_cidr (your IP /32) and VLESS users. Grafana + Cloudflare secrets are
+# NOT here: they come from Vault (step 2), fetched via the node's SVID into tmpfs.
 ./scripts/get-checksums.sh     # paste its output into terraform.tfvars
 terraform init && terraform apply
 ```

@@ -89,9 +89,9 @@ The AWS workload reaches GCP Vault **cross-cloud**, trust for which is establish
   endpoints (:8443), so a workload in one domain can authenticate one in the other.
 - **Secrets.** Workloads get short-lived X.509 **SVIDs** from SPIRE, then authenticate
   to Vault (cert auth, bound to the SVID's SPIFFE URI SAN) for scoped KV secrets. The
-  AWS node authenticates **cross-cloud** to GCP's Vault this way, and renders its Alloy
-  secret to **tmpfs**. Hetzner's Grafana/Cloudflare secrets currently come from its
-  tfvars onto disk; moving them onto the same Vault-Agent/tmpfs path is in progress.
+  AWS node authenticates **cross-cloud** to GCP's Vault this way. Both spokes render their
+  secrets to **tmpfs** (Hetzner fetches its Grafana + Cloudflare secrets from Vault via its
+  SPIRE SVID at boot; AWS its Alloy secret at pod start), never to persistent disk.
 
 ## Cloud cost breakdown
 
@@ -153,7 +153,7 @@ planned on a separate dashboard.
 - Hetzner SSH is key-only, with no root login. Two OS identities on separate keypairs: `deploy` (automation, broad sudo) and `ops` (interactive, sudo scoped to service lifecycle + logs), IP-restricted via `admin_cidr`; day-to-day admin is over the mesh. GCP admin is via IAP, AWS via SSM Session Manager, with no public SSH on either.
 - AWS IAM separates two least-privilege identities: a _deployment_ identity for running `terraform apply` (scoped to the resources it manages, explicitly denied KMS key deletion) and an MFA-enforced _operator_ identity for interactive admin. SPIRE creates KMS keys dynamically, so the deployment identity holds kms:Sign on * with destructive KMS actions withheld to bound the blast radius.
 - Root CA keys are non-exportable from Vault PKI (`viaduct.gcp`) and AWS KMS (`viaduct.aws`).
-- The AWS workload's Grafana secret is delivered from Vault into tmpfs (cross-cloud cert-auth). Hetzner's Grafana/Cloudflare secrets currently come from its tfvars onto disk; unifying them onto the Vault-Agent/tmpfs path is in progress. Per-node secret sets are disjoint.
+- Secrets are delivered to workloads from Vault into tmpfs via each node's SPIRE SVID (cert auth), never persistent disk: Hetzner fetches `kv/hetzner/*` at boot, AWS fetches `kv/aws/grafana` at pod start. Per-node secret sets are disjoint.
 - `backups/` and all `terraform.tfvars` (live keys/tokens) are gitignored.
 - Xray access log is `none`, to preserve user privacy; `geoip:ir` / `geosite:category-ir` are routed to `block` (no proxying back into Iran, removing a fingerprint signal); port 80 serves a decoy static site (anti-active-probing).
 

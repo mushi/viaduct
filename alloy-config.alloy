@@ -69,11 +69,13 @@ prometheus.remote_write "grafana_cloud" {
     external_labels = { node = "hetzner" }
 
     endpoint {
-    url = "${grafana_cloud_url}"
+    // Grafana Cloud creds come from the vault-rendered EnvironmentFile
+    // (/run/hetzner-secrets/grafana.env), fetched from Vault at boot; never on disk.
+    url = sys.env("GRAFANA_URL")
 
     basic_auth {
-      username = "${grafana_cloud_user}"
-      password = "${grafana_cloud_password}"
+      username = sys.env("GRAFANA_USER")
+      password = sys.env("GRAFANA_KEY")
     }
 
     queue_config {

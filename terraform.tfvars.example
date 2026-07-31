@@ -17,18 +17,9 @@ ops_ssh_public_key   = "ssh-ed25519 AAAA... your-ops-key-here"   # separate keyp
 # Names: alphanumeric, hyphens, underscores only.
 vless_users = ["alice", "bob"]
 
-# ── Grafana Cloud ─────────────────────────────────────────────────────────────
-# Sign up free at https://grafana.com/auth/sign-up
-# Then: Home → your stack → Prometheus → Details
-grafana_cloud_prometheus_url  = "https://prometheus-xxx.grafana.net/api/prom/push"
-grafana_cloud_prometheus_user = "123456"
-# Generate API key: grafana.com → your org → Access Policies → MetricsPublisher role
-grafana_cloud_api_key = "glc_eyJ..."
-
-# Cloudflare API token for Let's Encrypt DNS-01 challenge (XHTTP TLS cert).
-# Create at dash.cloudflare.com → My Profile → API Tokens
-# Permissions needed: Zone:DNS:Edit for your vless_domain zone.
-cloudflare_api_token = "your-cloudflare-api-token-here"
+# NOTE: the Grafana Cloud creds and the Cloudflare API token are NOT set here. The
+# Hetzner node fetches them from GCP Vault (kv/hetzner/grafana, kv/hetzner/cloudflare)
+# at boot via its SPIRE SVID, into tmpfs. Seed them once in Vault (see docs/RUNBOOK.md).
 
 # Public domain for the XHTTP/TLS inbound (Let's Encrypt via Cloudflare DNS-01).
 # Point a Cloudflare A record at this server, DNS-only (grey cloud, unproxied).

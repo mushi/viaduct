@@ -214,17 +214,8 @@ log "Building probe (linux/amd64)..."
 upload "${CONTROL_DIR}/probe" "/usr/local/bin/probe.new" "755"
 remote mv -f /usr/local/bin/probe.new /usr/local/bin/probe
 
-# ── 9. Start / restart all services ──────────────────────────────────────────
-
-log "Starting services..."
-remote systemctl restart conduit xray xray-exporter xray-user-stats alloy nginx xray-probe-client probe
-
-sleep 5
-if remote systemctl is-active --quiet conduit xray xray-exporter xray-user-stats alloy nginx xray-probe-client probe; then
-  log "All services active."
-else
-  log "WARNING: one or more services failed to start. Check: journalctl -u conduit -u xray -u xray-exporter -u xray-user-stats -u alloy -u nginx"
-fi
+# Services are (re)started in section 9 below, AFTER section 8b brings up the mesh and
+# fetches the Vault secrets + TLS cert that nginx and alloy now depend on.
 
 # ── 8b. WireGuard mesh + SPIRE agent (multi-cloud lab; GCP_SERVER_IP set) ─────
 # Both steps reach the GCP control plane over IAP TCP forwarding (the admin
@@ -314,6 +305,68 @@ EOF
       log "WARNING: spire-agent failed to start. Check: journalctl -u spire-agent"
     fi
   fi
+
+  # ── 8b-iii. Register the vault-agent workload entry on the GCP SPIRE server ────
+  # The one-shot secrets fetch (fetch-hetzner-secrets.sh) runs as the viaduct-secrets
+  # user; SPIRE issues it the vault-agent SVID by matching unix:uid. The agent's own
+  # ID is spiffe://TRUST_DOMAIN/hetzner (set by the join token's -spiffeID), so that is
+  # the stable parent. Delete-then-create so the selector always tracks the current uid
+  # (a rebuilt box may reallocate it).
+  SECRETS_UID="$(remote id -u viaduct-secrets 2>/dev/null || true)"
+  if [[ -n "$SECRETS_UID" ]]; then
+    log "Registering the hetzner vault-agent SPIRE entry (uid ${SECRETS_UID})..."
+    EID="$(gcp_ssh "sudo spire-server entry show -spiffeID spiffe://${TRUST_DOMAIN}/hetzner/vault-agent" 2>/dev/null | awk '/Entry ID/{print $NF}')"
+    [[ -n "$EID" ]] && gcp_ssh "sudo spire-server entry delete -entryID ${EID}" >/dev/null 2>&1 || true
+    gcp_ssh "sudo spire-server entry create \
+      -spiffeID spiffe://${TRUST_DOMAIN}/hetzner/vault-agent \
+      -parentID spiffe://${TRUST_DOMAIN}/hetzner \
+      -selector unix:uid:${SECRETS_UID} \
+      -dns vault-agent.hetzner" >/dev/null \
+      && log "vault-agent SPIRE entry registered." \
+      || log "WARNING: vault-agent SPIRE entry create failed; check the GCP SPIRE server."
+  else
+    log "WARNING: viaduct-secrets user not found on the box; skipping vault-agent SPIRE entry."
+  fi
+
+  # ── 8b-iv. Fetch the Vault-delivered secrets, then start their consumers ────────
+  # Mesh + SPIRE agent + the vault-agent entry now exist, so the box can fetch
+  # kv/hetzner/{grafana,cloudflare} from Vault into tmpfs. Alloy needs grafana.env;
+  # certbot needs cloudflare.ini for the initial cert. The entry can take a few seconds
+  # to reach the agent, so retry the fetch.
+  if [[ -n "$SECRETS_UID" ]]; then
+    log "Fetching Hetzner secrets from Vault into tmpfs..."
+    for _ in 1 2 3 4 5; do
+      remote "systemctl restart hetzner-secrets.service" 2>/dev/null || true
+      remote "test -s /run/hetzner-secrets/grafana.env" && break
+      sleep 5
+    done
+    if remote "test -s /run/hetzner-secrets/grafana.env" && remote "test -s /run/hetzner-secrets/cloudflare.ini"; then
+      log "Vault secrets rendered to tmpfs."
+      # Initial TLS cert (guarded so routine re-applies do not re-hit Let's Encrypt). nginx
+      # and alloy themselves are (re)started in section 9 below, once this cert + grafana.env exist.
+      if [[ -n "${VLESS_DOMAIN:-}" ]] && ! remote "test -d /etc/letsencrypt/live/${VLESS_DOMAIN}"; then
+        log "Obtaining the initial Let's Encrypt cert for ${VLESS_DOMAIN}..."
+        remote "certbot certonly --dns-cloudflare --dns-cloudflare-credentials /run/hetzner-secrets/cloudflare.ini -d ${VLESS_DOMAIN} --non-interactive --agree-tos --register-unsafely-without-email --dns-cloudflare-propagation-seconds 30" \
+          && log "Initial cert obtained." \
+          || log "WARNING: certbot failed; check the token in kv/hetzner/cloudflare."
+      fi
+    else
+      log "WARNING: Vault secrets not rendered; Alloy + certbot will lack credentials. Check 'journalctl -u hetzner-secrets' and that kv/hetzner/{grafana,cloudflare} are seeded."
+    fi
+  fi
+fi
+
+# ── 9. Start / restart all services ──────────────────────────────────────────
+# After section 8b: the mesh is up, secrets are in tmpfs (alloy's EnvironmentFile), and the
+# TLS cert exists (nginx). Tolerant restart so one failing unit warns rather than aborting.
+log "Starting services..."
+remote systemctl restart conduit xray xray-exporter xray-user-stats alloy nginx xray-probe-client probe || true
+
+sleep 5
+if remote systemctl is-active --quiet conduit xray xray-exporter xray-user-stats alloy nginx xray-probe-client probe; then
+  log "All services active."
+else
+  log "WARNING: one or more services failed to start. Check: journalctl -u conduit -u xray -u xray-exporter -u xray-user-stats -u alloy -u nginx"
 fi
 
 # ── 10. Download fresh backups ─────────────────────────────────────────────────

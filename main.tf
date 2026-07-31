@@ -130,7 +130,7 @@ data "cloudinit_config" "conduit" {
       xray_zip_sha256       = var.xray_zip_sha256
       vless_sni             = var.vless_sni
       vless_domain          = var.vless_domain
-      cloudflare_api_token  = var.cloudflare_api_token
+      fetch_secrets_script  = file("${path.module}/scripts/fetch-hetzner-secrets.sh")
       xray_exporter_version = var.xray_exporter_version
       xray_exporter_sha256  = var.xray_exporter_sha256
       alloy_version         = var.alloy_version
@@ -191,11 +191,9 @@ resource "local_file" "users_txt" {
 resource "local_file" "alloy_config" {
   filename        = "${path.module}/backups/alloy-config.alloy"
   file_permission = "0600"
-  content = templatefile("${path.module}/alloy-config.alloy.tpl", {
-    grafana_cloud_url      = var.grafana_cloud_prometheus_url
-    grafana_cloud_user     = var.grafana_cloud_prometheus_user
-    grafana_cloud_password = var.grafana_cloud_api_key
-  })
+  # No secrets in here any more: Grafana creds are read at runtime via sys.env() from
+  # the vault-rendered EnvironmentFile (/run/hetzner-secrets/grafana.env).
+  content = file("${path.module}/alloy-config.alloy")
 }
 
 # ── Provisioner ───────────────────────────────────────────────────────────────
@@ -235,6 +233,7 @@ resource "terraform_data" "provision" {
       USERS_FILE   = local_file.users_txt.filename
       ALLOY_CONFIG = local_file.alloy_config.filename
       PROBE_SRC    = "${path.module}/probe"
+      VLESS_DOMAIN = var.vless_domain # for the initial certbot run (secrets now come from Vault)
 
       # SPIRE agent: provisioner fetches the trust bundle + a join token from
       # the GCP SPIRE server. GCP must be deployed (SPIRE server running) first.

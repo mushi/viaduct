@@ -231,14 +231,17 @@ write_files:
     content: |
       [Unit]
       Description=Grafana Alloy (metrics agent)
-      After=network-online.target conduit.service xray-exporter.service
-      Wants=network-online.target
+      After=network-online.target conduit.service xray-exporter.service hetzner-secrets.service
+      Wants=network-online.target hetzner-secrets.service
 
       [Service]
       Type=simple
       User=alloy
       Group=alloy
       WorkingDirectory=/var/lib/alloy
+      # Grafana Cloud creds are rendered here from Vault at boot (never on disk in /etc).
+      # Required (no leading '-'): Alloy will not start until the fetch has run.
+      EnvironmentFile=/run/hetzner-secrets/grafana.env
       ExecStart=/usr/local/bin/alloy run /etc/alloy/config.alloy
       Restart=always
       RestartSec=15
@@ -248,6 +251,40 @@ write_files:
       ProtectSystem=strict
       ProtectHome=true
       ReadWritePaths=/var/lib/alloy
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # ── Vault secrets fetch: Grafana + Cloudflare from GCP Vault into tmpfs ─────
+  # The node's SPIRE SVID cert-auths to GCP Vault (over the mesh) and renders
+  # kv/hetzner/{grafana,cloudflare} to /run/hetzner-secrets. base64 so the multi-line
+  # script embeds cleanly in YAML.
+  - path: /usr/local/bin/fetch-hetzner-secrets.sh
+    owner: root:root
+    permissions: "0755"
+    encoding: b64
+    content: ${base64encode(fetch_secrets_script)}
+
+  - path: /etc/systemd/system/hetzner-secrets.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Fetch Hetzner secrets from GCP Vault into tmpfs (SPIRE SVID cert-auth)
+      # Needs the mesh + SPIRE agent. On first deploy those come up in provision.sh
+      # (post-boot), so this fails at boot and the provisioner (re)starts it; on a
+      # reboot both are already enabled, so it runs cleanly and re-renders the secrets.
+      After=network-online.target wg-quick@wg0.service spire-agent.service
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      User=viaduct-secrets
+      Group=viaduct-secrets
+      # setgid dir (2750) so rendered files inherit group alloy; the '+' runs as root.
+      ExecStartPre=+/usr/bin/install -d -o viaduct-secrets -g alloy -m 2750 /run/hetzner-secrets
+      ExecStart=/usr/local/bin/fetch-hetzner-secrets.sh
+      RemainAfterExit=yes
 
       [Install]
       WantedBy=multi-user.target
@@ -339,14 +376,10 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 
-  # ── Cloudflare API credentials for certbot DNS-01 challenge ─────────────
-  # Used by certbot to create a DNS TXT record proving domain ownership.
-  # Requires a Cloudflare API token with Zone:DNS:Edit permission.
-  - path: /etc/cloudflare-certbot.ini
-    owner: root:root
-    permissions: "0600"
-    content: |
-      dns_cloudflare_api_token = ${cloudflare_api_token}
+  # Cloudflare API credentials for certbot are NOT written to disk. The vault fetch
+  # (hetzner-secrets.service) renders them to /run/hetzner-secrets/cloudflare.ini (tmpfs)
+  # from kv/hetzner/cloudflare; certbot (initial run in provision.sh, and renewals) reads
+  # them from there.
 
   # ── Automatic security updates ────────────────────────────────────────────
   - path: /etc/apt/apt.conf.d/20auto-upgrades
@@ -706,6 +739,8 @@ runcmd:
   - useradd --system --no-create-home --shell /usr/sbin/nologin xray
   - useradd --system --no-create-home --shell /usr/sbin/nologin alloy
   - useradd --system --no-create-home --shell /usr/sbin/nologin probe
+  # Dedicated identity for the Vault secrets fetch; its uid is the SPIRE unix:uid selector.
+  - useradd --system --no-create-home --shell /usr/sbin/nologin viaduct-secrets
 
   # ── Directories ───────────────────────────────────────────────────────────
   - mkdir -p /var/lib/conduit/data
@@ -794,15 +829,10 @@ runcmd:
     <body><h1>Welcome</h1><p>This site is currently under maintenance. Please check back later.</p></body>
     </html>
     EOF
-  - |
-    certbot certonly \
-      --dns-cloudflare \
-      --dns-cloudflare-credentials /etc/cloudflare-certbot.ini \
-      -d ${vless_domain} \
-      --non-interactive \
-      --agree-tos \
-      --register-unsafely-without-email \
-      --dns-cloudflare-propagation-seconds 30
+  # The initial certbot run is NOT here: it needs the Cloudflare token from Vault,
+  # which is only reachable once the mesh + SPIRE agent are up (provision.sh). The
+  # provisioner obtains the cert (guarded, once) after the secrets fetch; renewals then
+  # run on the box via the certbot timer, reading the tmpfs credentials.
   - |
     cat > /etc/nginx/conf.d/site.conf <<'NGINX_CONF'
     server {
@@ -920,7 +950,7 @@ runcmd:
   # ── Register units (do NOT start — provisioner does that) ─────────────────
   - systemctl daemon-reload
   - systemctl reload ssh   # apply SSH hardening (root login off; deploy/ops only)
-  - systemctl enable conduit.service xray.service xray-exporter.service xray-user-stats.service alloy.service nginx.service xray-probe-client.service probe.service
+  - systemctl enable conduit.service xray.service xray-exporter.service xray-user-stats.service alloy.service nginx.service xray-probe-client.service probe.service hetzner-secrets.service
 
   # ── Signal cloud-init completion ──────────────────────────────────────────
   # Only reached if all checksum verifications above passed.

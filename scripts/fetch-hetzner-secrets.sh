@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Fetch Hetzner's Grafana + Cloudflare secrets from GCP Vault into tmpfs, using this
+# node's SPIRE SVID (cert auth) over the WireGuard mesh. One-shot: run at boot before
+# Alloy and certbot, and re-run to pick up rotated secrets. Mirrors the AWS Alloy
+# startup fetch. No secret ever touches persistent disk.
+#
+# Runs as the dedicated `viaduct-secrets` user, so the SPIRE Workload API attests it by
+# unix:uid and issues only the spiffe://viaduct.gcp/hetzner/vault-agent SVID. That SVID
+# cert-auths to Vault as hetzner-vault-agent, scoped to kv/hetzner/*.
+set -euo pipefail
+
+SPIRE_SOCK="/run/spire-agent/public/api.sock"
+HUB_MESH_IP="10.99.0.1"                 # GCP hub over wg0
+VAULT_ADDR="https://${HUB_MESH_IP}:8200"
+RUN="/run/hetzner-secrets"              # tmpfs (RAM), group-readable by alloy
+SVID="$RUN/svid"
+CACERT="$RUN/vault-ca.crt"
+
+umask 077
+mkdir -p "$SVID"
+
+# 1. SVID from the SPIRE agent Workload API (attested by this process's uid). Retry:
+#    after a reboot the agent may still be attesting to the server when this fires,
+#    returning "Unavailable"; wait for it (up to ~60s) so reboots self-heal.
+for attempt in $(seq 1 12); do
+  /usr/local/bin/spire-agent api fetch x509 -socketPath "$SPIRE_SOCK" -write "$SVID" >/dev/null 2>&1 && break
+  [ "$attempt" = 12 ] && { echo "ERROR: SVID fetch failed after retries (spire-agent not ready / mesh down?)"; exit 1; }
+  sleep 5
+done
+
+# 2. GCP Vault's CURRENT listener cert, fetched over the mesh. WireGuard has already
+#    authenticated that ${HUB_MESH_IP} is the GCP hub, so this trust-on-first-use is
+#    sound and always reflects the current cert (which rotates on a GCP rebuild).
+openssl s_client -connect "${HUB_MESH_IP}:8200" </dev/null 2>/dev/null | openssl x509 > "$CACERT"
+
+# 3. Cert-auth to Vault with the SVID (role hetzner-vault-agent, scoped to kv/hetzner/*).
+#    Uses the Vault HTTP API via curl + jq, so the data-plane box needs no Vault binary.
+vapi() { curl -sf --cacert "$CACERT" "$@"; }
+TOKEN="$(vapi --cert "$SVID/svid.0.pem" --key "$SVID/svid.0.key" \
+  --request POST --data '{"name":"hetzner-vault-agent"}' \
+  "$VAULT_ADDR/v1/auth/cert/login" | jq -r '.auth.client_token')"
+[ -n "$TOKEN" ] && [ "$TOKEN" != "null" ] || { echo "ERROR: Vault cert-auth failed"; exit 1; }
+
+kv() { vapi -H "X-Vault-Token: $TOKEN" "$VAULT_ADDR/v1/kv/data/hetzner/$1" | jq -r ".data.data.$2"; }
+
+# 4. Render Grafana creds (Alloy EnvironmentFile) and the Cloudflare token (certbot ini).
+#    Group alloy is inherited from the setgid dir; alloy reads grafana.env, root reads the ini.
+{
+  printf 'GRAFANA_URL=%s\n'  "$(kv grafana prometheus_url)"
+  printf 'GRAFANA_USER=%s\n' "$(kv grafana prometheus_user)"
+  printf 'GRAFANA_KEY=%s\n'  "$(kv grafana api_key)"
+} > "$RUN/grafana.env"
+
+printf 'dns_cloudflare_api_token = %s\n' "$(kv cloudflare api_token)" > "$RUN/cloudflare.ini"
+
+chmod 0640 "$RUN/grafana.env" "$RUN/cloudflare.ini"
+
+# 5. Do not leave the SVID key or the fetched cert lying in tmpfs after use.
+unset TOKEN
+rm -rf "$SVID" "$CACERT"
+echo "[fetch-hetzner-secrets] rendered grafana.env + cloudflare.ini in $RUN"

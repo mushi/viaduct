@@ -7,16 +7,21 @@
 # their out-of-band secret-ids, cert auth, the gcp-auth admin/restore/wireguard
 # roles, and finally revokes the root token. Idempotent and safe to re-run.
 #
-# The only operator steps left around it: `vault operator init` (store the recovery
-# keys offline) before, and seeding kv/aws/grafana after (the AWS Alloy secret, yours
-# to supply). Hetzner's Grafana/Cloudflare come from its own tfvars for now.
+# The only operator steps left around it: `vault operator init` (store the recovery keys
+# offline) before, and seeding the workload secrets after (kv/aws/grafana,
+# kv/hetzner/grafana, kv/hetzner/cloudflare), which the nodes fetch via their SVIDs.
 set -euo pipefail
 export PATH="/snap/bin:$PATH"
 
 md() { curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/$1"; }
 log() { echo "[bootstrap-vault] $*"; }
 
-export VAULT_ADDR="https://127.0.0.1:8200" VAULT_CACERT="/opt/vault/tls/vault.crt"
+# Loopback to the co-located Vault. Skip TLS verification: on 127.0.0.1 there is no MITM
+# to defend against, and the self-signed cert is root-owned (not readable by a non-root
+# operator running this). Remote clients (agents, cross-cloud) still verify the cert.
+# Unset any inherited VAULT_CACERT: vault tries to load it even with skip-verify set.
+unset VAULT_CACERT
+export VAULT_ADDR="https://127.0.0.1:8200" VAULT_SKIP_VERIFY="true"
 : "${VAULT_TOKEN:?export VAULT_TOKEN (the init root token) first}"
 command -v jq >/dev/null || { echo "jq required"; exit 1; }
 
@@ -156,15 +161,15 @@ vault write auth/cert/certs/hetzner-vault-agent \
 rm -f /tmp/gcp-root.pem
 log "hetzner-vault-agent cert role ready"
 
-log "Bootstrap complete. Seed the AWS node's Alloy secret (consumed cross-cloud)."
-log "This script revoked the root token and cleared its Vault env, so run the full command:"
+log "Bootstrap complete. Seed the workload secrets (this script revoked root and cleared"
+log "its Vault env, so log in fresh):"
 log ""
-log "  export VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/opt/vault/tls/vault.crt"
+log "  unset VAULT_CACERT   # vault loads it even with skip-verify; clear any lingering value"
+log "  export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true"
 log "  vault login -method=gcp role=admin type=gce"
-log "  vault kv put kv/aws/grafana prometheus_url=<url> prometheus_user=<user> api_key=<metrics:write-token>"
-# Hetzner's Grafana/Cloudflare secrets currently come from its own tfvars, not Vault,
-# so kv/hetzner/* is not seeded here yet. The hetzner-vault-agent cert role above is
-# the auth scaffolding for the Vault Agent delivery that will consume kv/hetzner/*.
+log "  vault kv put kv/aws/grafana        prometheus_url=<url> prometheus_user=<user> api_key=<metrics:write-token>"
+log "  vault kv put kv/hetzner/grafana    prometheus_url=<url> prometheus_user=<user> api_key=<metrics:write-token>"
+log "  vault kv put kv/hetzner/cloudflare  api_token=<cloudflare-zone-dns-edit-token>"
 
 # ── Revoke the init root token, only when running AS root, and only after the
 #    admin gcp-auth login is proven to work (so you are never locked out). ────────
