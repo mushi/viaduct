@@ -19,10 +19,10 @@ Rebuild explicitly:
 | Hetzner data plane | `terraform apply -replace=hcloud_server.conduit` (repo root) |
 | AWS node | `cd aws && terraform apply -replace=aws_instance.spire` |
 
-**After ANY GCP rebuild, refresh AWS:** `cd aws && terraform apply` (plain apply = a refresh,
-not a rebuild). A GCP rebuild rotates its self-signed Vault cert; `crosscloud-refresh`
-re-syncs the fingerprint over IAP + SSM. Skip it and the AWS→GCP Vault path (Alloy) stays
-broken on the stale cached cert.
+A GCP rebuild needs no follow-up on the spokes: each fetches GCP Vault's (rotated) cert
+fresh over the mesh when it next needs it (Hetzner at boot, AWS at Alloy pod start), so a
+cert rotation self-heals. GCP's SPIRE CA is stable across a rebuild (restored from the Vault
+snapshot), so federation needs no re-import either.
 
 In-place changes apply normally: add/remove VLESS users or rotate Grafana creds with a
 repo-root `terraform apply` (re-runs `scripts/provision.sh`, a few-second service blip, no
@@ -121,9 +121,8 @@ The provisioners join AWS to the mesh and sync GCP Vault's cert fingerprint live
 SSM (no pinned fingerprint to maintain). The `aws-vault-agent` cert role on GCP Vault is
 created automatically by `federation-sync`.
 
-> **Deployment-identity IAM.** The AWS SSM-driven provisioners (mesh-join in
-> `aws/wireguard.tf`, cross-cloud CA refresh in `aws/crosscloud.tf`) run SSM Run Command on
-> the box, and mesh-join relays the peer PSK through an SSM SecureString. So the identity
+> **Deployment-identity IAM.** The AWS mesh-join provisioner (`aws/wireguard.tf`) runs SSM
+> Run Command on the box and relays the peer PSK through an SSM SecureString. So the identity
 > running `aws/` apply needs, beyond resource CRUD: `ssm:SendCommand` +
 > `ssm:GetCommandInvocation`; and for the PSK only, `ssm:PutParameter`/`DeleteParameter`
 > (scoped to `wg_psk_parameter`, default `/viaduct/wg/aws-psk`) plus `kms:Encrypt`/

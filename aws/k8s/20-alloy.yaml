@@ -7,8 +7,9 @@
 # the SVID is only needed at startup, so no continuous vault-agent sidecar needed.
 #
 # __GCP_CONTROL_PLANE_IP__ is substituted by startup.sh (real IP kept out of the repo).
-# Depends on: the vault-ca ConfigMap + the spiffe://viaduct.aws/vault-agent SPIRE entry
-# (both host-created at deploy — see README).
+# The init container fetches GCP Vault's cert itself over the mesh (WireGuard authenticates
+# the peer), so there is no vault-ca ConfigMap to maintain. Depends on the
+# spiffe://viaduct.aws/vault-agent SPIRE entry (host-created at deploy).
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -36,15 +37,25 @@ spec:
         volumeMounts:
         - { name: spiffe-workload-api, mountPath: /spiffe-workload-api, readOnly: true }
         - { name: svids, mountPath: /svids }
-      - name: render-config
+      # Fetch this node's secret from GCP Vault using its SPIRE SVID (cert auth) over the
+      # mesh, and render Alloy's config with it. The AWS analog of Hetzner's
+      # fetch-hetzner-secrets.sh: establish trust (fetch GCP's cert over the mesh) ->
+      # authenticate (SVID) -> fetch (kv/aws/grafana) -> render.
+      - name: vault-fetch
         image: hashicorp/vault@sha256:3fd53308acccd9e4e83fde3e6c6cf5b15e0f7fac1ff7510780b8b23f5e4c3de7 # 2.0.2
         env:
         - { name: VAULT_ADDR, value: "https://__GCP_CONTROL_PLANE_IP__:8200" }
-        - { name: VAULT_CACERT, value: "/vault-ca/vault-ca.crt" }
         command: ["/bin/sh", "-c"]
         args:
         - |
           set -e
+          # The vault image (Alpine) has no openssl; add it to fetch GCP's cert.
+          apk add --no-cache openssl >/dev/null
+          # Fetch GCP Vault's current listener cert over the mesh. WireGuard already
+          # authenticates the peer, so this trust-on-first-use is sound and always current
+          # (it rotates on a GCP rebuild). No pinned fingerprint, no vault-ca ConfigMap.
+          openssl s_client -connect __GCP_CONTROL_PLANE_IP__:8200 </dev/null 2>/dev/null | openssl x509 > /tmp/vault-ca.crt
+          export VAULT_CACERT=/tmp/vault-ca.crt
           vault login -method=cert -client-cert=/svids/svid.0.pem -client-key=/svids/svid.0.key name=aws-vault-agent >/dev/null
           U=$(vault kv get -field=prometheus_user kv/aws/grafana)
           K=$(vault kv get -field=api_key kv/aws/grafana)
@@ -83,10 +94,11 @@ spec:
           limits: { memory: 128Mi, cpu: 200m }
         securityContext:
           allowPrivilegeEscalation: false
-          capabilities: { drop: [ALL] }
+          # apk add (package extraction: chown/mode the unpacked files) needs these back;
+          # everything else stays dropped. This init container is short-lived (fetch + render).
+          capabilities: { drop: [ALL], add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID] }
         volumeMounts:
         - { name: svids, mountPath: /svids }
-        - { name: vault-ca, mountPath: /vault-ca }
         - { name: rendered, mountPath: /rendered }
       containers:
       - name: alloy
@@ -113,7 +125,6 @@ spec:
       - { name: svids, emptyDir: { medium: Memory } }
       - { name: rendered, emptyDir: { medium: Memory } }
       - { name: alloy-tmp, emptyDir: {} }
-      - { name: vault-ca, configMap: { name: vault-ca } }
       - { name: host-proc, hostPath: { path: /proc } }
       - { name: host-sys, hostPath: { path: /sys } }
       - { name: host-txt, hostPath: { path: /var/lib/viaduct-textfile } }

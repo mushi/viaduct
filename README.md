@@ -71,6 +71,8 @@ operator admin: Vault `:8200`, SPIRE `:8081`, and federation `:8443` are reachab
 drops any non-peer packet, so the crypto is the gate. The operator reaches GCP over IAP, AWS
 over SSM, and Vault/SPIRE/Hetzner-SSH as a mesh peer (`10.99.0.4`).
 
+**Wireguard** is lovely. It's small, elegant, does one thing reliably. Big respect to Jason Donenfeld. 
+
 **Runtime identity → secrets flow:** each SPIRE agent attests its node (Hetzner
 `join_token` → GCP server; AWS `aws_iid` → its own server) and receives an agent SVID; the
 agent issues short-lived SVIDs to local workloads over the Workload API; a workload presents

@@ -1,39 +1,29 @@
 #!/usr/bin/env bash
-# Cross-cloud bootstrap (viaduct-crosscloud.service). Retries until the GCP control
-# plane is reachable (firewall open to this EIP), then:
-#   1. imports the viaduct.gcp federated trust bundle (https_spiffe)
-#   2. fetches GCP Vault's listener CA, verifies its pinned fingerprint
-#   3. publishes it as the vault-ca ConfigMap
-#   4. deploys Alloy (SVID cert-auths cross-cloud to GCP Vault for its Grafana token)
-# Config from /opt/viaduct/crosscloud.env (GCP_IP, GCP_FP, GCP_TRUST_DOMAIN).
+# Cross-cloud bootstrap (viaduct-crosscloud.service). Runs at boot and retries until the
+# GCP control plane is reachable over the WireGuard mesh, then:
+#   1. imports the viaduct.gcp federated trust bundle (https_spiffe), bootstrapping the
+#      federation trust that SPIRE's federates_with polling then maintains;
+#   2. deploys Alloy, whose init container fetches GCP Vault's cert over the mesh and
+#      cert-auths for its Grafana token at pod start.
+# Config from /opt/viaduct/crosscloud.env (GCP_IP = the hub mesh IP, GCP_TRUST_DOMAIN).
+# No Vault cert is fetched or fingerprint-pinned here: the mesh authenticates the peer, so
+# Alloy trusts-on-first-use over it (self-healing across a GCP cert rotation, no refresh).
 set -uo pipefail
 . /opt/viaduct/crosscloud.env
 KUBECTL="k3s kubectl"
 SPIRE="/opt/spire/bin/spire-server"
 
 attempt() {
-  curl -sk "https://$GCP_IP:8443" | $SPIRE bundle set -format spiffe -id "spiffe://$GCP_TRUST_DOMAIN" || return 1
-  mkdir -p /etc/vault-agent/tls
-  openssl s_client -connect "$GCP_IP:8200" </dev/null 2>/dev/null | openssl x509 -out /tmp/vault-ca.crt || return 1
-  FP=$(openssl x509 -in /tmp/vault-ca.crt -noout -fingerprint -sha256 | cut -d= -f2)
-  if [ "$FP" != "$GCP_FP" ]; then echo "FATAL: vault.crt fingerprint mismatch ($FP != $GCP_FP)"; return 2; fi
-  install -m0644 /tmp/vault-ca.crt /etc/vault-agent/tls/vault-ca.crt; rm -f /tmp/vault-ca.crt
-  $KUBECTL create configmap vault-ca -n viaduct \
-    --from-file=vault-ca.crt=/etc/vault-agent/tls/vault-ca.crt --dry-run=client -o yaml | $KUBECTL apply -f - || return 1
+  curl -sf -k --max-time 10 "https://$GCP_IP:8443" \
+    | $SPIRE bundle set -format spiffe -id "spiffe://$GCP_TRUST_DOMAIN" || return 1
   $KUBECTL apply -f /opt/viaduct/k8s/20-alloy.yaml || return 1
   return 0
 }
 
 for i in $(seq 1 80); do
-  # Capture attempt's own rc directly. (Using `if attempt; then ... fi` and then
-  # `rc=$?` reads the IF statement's status, which is 0, so a mismatch never
-  # aborted and looped ~20 min.)
-  attempt; rc=$?
-  [ "$rc" = "0" ] && { echo "cross-cloud bootstrap complete"; exit 0; }
-  # A fingerprint mismatch (rc=2) is NOT transient — fail fast instead of looping.
-  [ "$rc" = "2" ] && { echo "ABORTED (fingerprint mismatch — possible MITM)"; exit 2; }
-  echo "cross-cloud bootstrap attempt $i failed; retry in 15s (is the GCP firewall open to this EIP + Vault aws-vault-agent role configured?)"
+  attempt && { echo "cross-cloud bootstrap complete"; exit 0; }
+  echo "cross-cloud bootstrap attempt $i failed; retry in 15s (mesh up yet? aws-vault-agent Vault role seeded?)"
   sleep 15
 done
-echo "gave up after ~20 min; re-run with: systemctl start viaduct-crosscloud"
+echo "gave up after ~20 min; re-run with: systemctl restart viaduct-crosscloud"
 exit 1

@@ -268,14 +268,12 @@ EOF
 systemctl daemon-reload
 systemctl enable --now egress-guardrail.timer
 
-# ─── 10. cross-cloud bootstrap (installed here, DRIVEN by the AWS-root provisioner) ──
-# GCP's self-signed Vault listener cert rotates on every GCP rebuild, so a
-# fingerprint baked into user_data would go stale and this script would loop.
-# Instead aws/scripts/crosscloud-refresh.sh (run by null_resource.crosscloud_refresh)
-# reads the CURRENT fingerprint from the GCP box over IAP, writes GCP_FP into
-# crosscloud.env over SSM, and runs this bootstrap. So we only lay down the static
-# config + script + unit here and do NOT start it — which also keeps crosscloud
-# from blocking the rest of user_data (e.g. §11).
+# ─── 10. cross-cloud bootstrap (self-driving; retries for the mesh) ────────────
+# Imports the viaduct.gcp federation bundle and deploys Alloy. It needs the mesh, which
+# the AWS-root provisioner (wg-mesh-join) brings up post-boot, so the unit auto-starts at
+# boot and its own retry loop waits until the mesh + GCP are reachable. No fingerprint is
+# synced: the mesh authenticates the peer, so Alloy TOFUs GCP Vault's cert per pod start,
+# self-healing across a GCP cert rotation with no refresh step.
 cat > /opt/viaduct/crosscloud.env <<EOF
 GCP_IP=$GCP_IP
 GCP_TRUST_DOMAIN=$GCP_TRUST_DOMAIN
@@ -285,15 +283,22 @@ ${crosscloud_script}
 CROSSCLOUD
 cat > /etc/systemd/system/viaduct-crosscloud.service <<'EOF'
 [Unit]
-Description=Viaduct cross-cloud bootstrap (federation bundle + vault.crt + Alloy)
-After=spire-agent.service k3s.service network-online.target
+Description=Viaduct cross-cloud bootstrap (federation bundle + Alloy)
+After=spire-agent.service k3s.service wg-quick@wg0.service network-online.target
 Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/opt/viaduct/crosscloud-bootstrap.sh
 RemainAfterExit=true
+[Install]
+WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
+# enable = auto-start on future boots (After=wg-quick@wg0, so the mesh is up first).
+# start --no-block = kick it off now without waiting on its retry loop, which would block
+# cloud-init; it retries in the background until the mesh (wg-mesh-join, post-boot) is up.
+systemctl enable viaduct-crosscloud.service
+systemctl start --no-block viaduct-crosscloud.service
 
 # ─── 11. WireGuard spoke key (mesh member; provisioner finalises wg0) ──────────
 # Generate this node's WG key on first boot, 0600 on the persistent disk. The
