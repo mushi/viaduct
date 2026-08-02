@@ -5,6 +5,32 @@ embedded via Terraform `file()`) and is the source of truth for ordering. The Va
 (the `aws-vault-agent` cert role, `aws-workload` policy, `kv/aws/grafana` secret) is set up
 per [docs/RUNBOOK.md](../../docs/RUNBOOK.md).
 
+## Topology (host vs. pods)
+
+The bare VM runs the identity and mesh plane and k3s itself; the relay and telemetry run as
+pods. SPIRE runs on the **host** (its agent does `aws_iid` node attestation and so cannot be
+a pod), and the agent's Workload API socket is projected into pods by the SPIFFE CSI driver,
+which is how a pod gets an SVID.
+
+```
+┌─ AWS EC2 t4g.small · viaduct.aws ────────────────────────────────────────────────┐
+│ HOST (bare VM)                                                                   │
+│ wg0 10.99.0.3    WireGuard mesh ──►  GCP control plane (Vault, SPIRE root)       │
+│ SPIRE server     self-signed CA, keys in AWS KMS · federation :8443 ◄─► GCP      │
+│ SPIRE agent      aws_iid node attestation · serves the Workload API socket       │
+│ k3s server       --disable traefik, servicelb                                    │
+│ timers           spire-agent-token (k8s SA token) · egress-guardrail             │
+│                  (~90 GB auto-stop) · viaduct-crosscloud (bootstrap)             │
+├─ k3s pods ───────────────────────────────────────────────────────────────────────┤
+│ spire   ns   spiffe-csi-driver (DaemonSet)                                       │
+│              └ projects the agent's Workload API socket into pods                │
+│ viaduct ns   conduit (Deployment + PVC) ──► Psiphon brokers (capped)             │
+│              alloy (Deployment); init: fetch-svid + vault-fetch                  │
+│                ├─► GCP Vault (SVID cert-auth over mesh) → Grafana token          │
+│                └─► Grafana Cloud (metrics)                                       │
+└──────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## Manifests
 
 | File | Purpose |
@@ -19,7 +45,7 @@ per [docs/RUNBOOK.md](../../docs/RUNBOOK.md).
 1. Install SPIRE server + agent and k3s; apply `00` → host mints a short-lived SA token (`kubectl create token spire-agent -n spire --duration=24h`) to `/opt/spire/conf/agent/k8s-sa-token` and starts a systemd timer that rotates it (see [Hardening](#hardening)); agent gains the `k8s` attestor.
 2. Apply `01` (CSI) and `10` (Conduit).
 3. Register `spiffe://viaduct.aws/vault-agent`, parent = the runtime `aws_iid` agent ID, selectors `k8s:ns:viaduct` + `k8s:sa:vault-agent`, `-dns vault-agent.aws`.
-4. Cross-cloud bootstrap (`../scripts/crosscloud-bootstrap.sh`, retries until GCP is reachable): import the `viaduct.gcp` federated bundle, fetch + fingerprint-verify `vault.crt`, create the `vault-ca` ConfigMap, apply `20` (Alloy).
+4. Cross-cloud bootstrap (`../scripts/crosscloud-bootstrap.sh`, retries until GCP is reachable over the mesh): import the `viaduct.gcp` federated bundle, then apply `20` (Alloy). Alloy's `vault-fetch` init container fetches GCP Vault's listener cert itself over the mesh (TOFU; WireGuard authenticates the peer), so there is no fingerprint to verify and no `vault-ca` ConfigMap to maintain.
 
 Alloy authenticates to GCP Vault with the `aws-vault-agent` cert role, which
 `federation-sync` creates automatically on every AWS build. The `aws-workload` policy it
@@ -31,7 +57,7 @@ placeholder in `20` first (`sed "s|__GCP_CONTROL_PLANE_IP__|<gcp-ip>|g"`).
 
 ## Notes
 
-- The `vault-ca` ConfigMap, the k8s SA token, and the SPIRE entry aren't vendored as YAML, they depend on a host cert, a runtime instance-id, and a host-minted token (see [Hardening](#hardening)).
+- The k8s SA token and the SPIRE entry aren't vendored as YAML, they depend on a runtime instance-id and a host-minted token (see [Hardening](#hardening)).
 - Egress cost is bounded by the host `egress-guardrail` timer (auto-stop near 90 GB/mo); the gauge `aws_mtd_egress_bytes` / `aws_egress_cap_bytes` reaches Grafana via the Alloy unix-exporter textfile collector.
 
 ## Hardening

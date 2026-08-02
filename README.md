@@ -27,7 +27,7 @@ Three nodes, each its **own Terraform root** (independent, isolated state):
 | Node | Cloud          | Trust domain | Runs |
 |---|----------------|---|---|
 | **Control plane** | GCP e2-micro   | `viaduct.gcp` | Vault (secrets) + SPIRE server |
-| **Data plane** | Hetzner CX23   | `viaduct.gcp` (agent) | Xray VLESS + Conduit + SPIRE agent + Vault Agent |
+| **Data plane** | Hetzner CX23   | `viaduct.gcp` (agent) | Xray VLESS + Conduit + SPIRE agent + Vault secrets via SVID |
 | **k8s node** | AWS t4g.small  | `viaduct.aws` | k3s + SPIRE server + agent + capped Conduit |
 
 **VLESS** (Xray-core): users connect with a client app (e.g. V2RayNG, v2rayN, Nekoray) that
@@ -48,22 +48,33 @@ clients via Psiphon's brokers, works even when the node IP is blocked.
    ║ WireGuard HUB · 10.99.0.1 · :51820  (the only public port)      ║
    ║ Vault :8200 · SPIRE :8081 · federation :8443  →  wg0-only       ║
    ╚═══▲═══════════════════════════════════════════════════▲═════════╝
-       │ wg0: agent :8081 + Vault           wg0: federation :8443     │
-       │                                         + Vault (Alloy)      │
- ┌─────┴──────────────────────┐              ┌────────────────────────┴───┐
+       │ wg0: agent :8081 + Vault           wg0: federation :8443     
+       │                                         + Vault (Alloy)      
+       │                                                   │
+ ┌─────┴──────────────────────┐              ┌─────────────┴──────────────┐
  │ Hetzner · 10.99.0.2        │              │ AWS · 10.99.0.3            │
  │ viaduct.gcp, SPIRE agent   │              │ viaduct.aws, SPIRE server  │
- │ Vault Agent → secrets      │              │ k3s + SPIFFE CSI + Alloy   │
+ │ SVID → Vault → secrets     │              │ k3s + SPIFFE CSI + Alloy   │
  │ Xray VLESS + Conduit       │              │ Conduit pod (capped)       │
  │ admin over wg0; :22 break  │              │ SSM only · no inbound      │
  └───┬───────────────┬────────┘              └─────────────┬──────────────┘
      │ VLESS         │ Conduit                             │ Conduit (capped)
+     │ :443  Reality │ in-proxy, no inbound                │ in-proxy, no inbound
+     │ :8443 XHTTP   │ (dials out to brokers)              │ (dials out to brokers)
      ▼               ▼                                     ▼
-  end users   ◄── Psiphon brokers / direct VLESS ──►    end users
+  end users (direct)  ◄──── Psiphon brokers ────►       end users
                           │ (all nodes' Alloy)
                           ▼
                   Grafana Cloud (metrics + dashboards)
 ```
+
+**Data plane (public ingress).** Only the Hetzner node accepts inbound user traffic, all
+over TCP: `:443` VLESS+Reality (XTLS-Vision, direct connections, no real cert; impersonates
+`vless_sni`), `:8443` VLESS+XHTTP over real TLS (nginx terminates a Let's Encrypt cert, for
+where the IP is blocked but the domain resolves), and `:80` a static nginx decoy site that
+defeats active HTTP probing. Conduit has **no inbound port** on either node: the Psiphon
+in-proxy dials out to Psiphon's brokers, which pair it with clients, so it relays even when
+the node IP is blocked. AWS's node is otherwise closed (SSM only, no inbound).
 
 **Mesh + lockdown.** WireGuard is the fabric for all cross-cloud control-plane traffic and
 operator admin: Vault `:8200`, SPIRE `:8081`, and federation `:8443` are reachable only over

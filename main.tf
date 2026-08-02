@@ -51,7 +51,7 @@ resource "hcloud_firewall" "conduit" {
   }
 
   # Port 443: xray Reality inbound (direct connections). xray handles TLS
-  # impersonation of vless_sni; no nginx involved on this port.
+  # impersonation of vless_sni; no nginx involved on this port. Use from Iran.
   rule {
     direction  = "in"
     protocol   = "tcp"
@@ -60,7 +60,7 @@ resource "hcloud_firewall" "conduit" {
   }
 
   # Port 8443: nginx terminates TLS (Let's Encrypt cert) and proxies XHTTP
-  # traffic to xray XHTTP inbound on localhost:10000. Use from Iran.
+  # traffic to xray XHTTP inbound on localhost:10000.
   rule {
     direction  = "in"
     protocol   = "tcp"

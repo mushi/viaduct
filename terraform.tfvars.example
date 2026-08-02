@@ -2,7 +2,11 @@
 # terraform.tfvars is gitignored, do not commit it.
 
 # ── Required ──────────────────────────────────────────────────────────────────
+# Generate at: https://console.hetzner.cloud → (project) → Security → API Tokens
+# Needs Read + Write permissions.
 hcloud_token         = "your-hetzner-api-token-here"
+# Generate with: ssh-keygen -t ed25519 -C "conduit-station"
+# Then: cat ~/.ssh/id_ed25519.pub
 ssh_public_key       = "ssh-ed25519 AAAA... your-deploy-key-here"
 ssh_private_key_path = "~/.ssh/id_ed25519"
 ops_ssh_public_key   = "ssh-ed25519 AAAA... your-ops-key-here"   # separate keypair for the interactive `ops` user

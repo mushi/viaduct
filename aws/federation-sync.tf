@@ -2,7 +2,9 @@
 # A rebuild gives the AWS SPIRE server a fresh datastore, so it mints a new CA and
 # its trust bundle changes. https_spiffe federation self-heals normal ca_ttl
 # rotations (old and new CA overlap in the bundle), but not a rebuild's
-# discontinuous CA, so GCP must re-import. This automates the one manual step
+# discontinuous CA: polling can't bootstrap it (validating AWS's new endpoint SVID
+# needs the new CA GCP doesn't have yet), so GCP must re-import out-of-band. This
+# re-import automates the one manual step
 # (README federation step) by reaching the GCP box over IAP, the same pattern the
 # Hetzner provisioner uses, and running `spire-server bundle set` there.
 

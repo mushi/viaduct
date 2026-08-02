@@ -24,8 +24,8 @@ Both the xray client and the probe run as unprivileged users.
 
 ### Use
 
-`go build`
+`go run .` - run locally standalone and confirm a SOCKS unreachable error is emitted every 60s
 
-Run standalone to failures logged every 60s. Or a `terraform apply` will provision the dependent systemd
-service, compile, deploy and run the code, scrape its metrics and forward to the 
+`terraform apply` - this will provision the SOCKS5 systemd service dependency and the probe systemd unit,
+compile and deploy the code, and start the services, scrape metrics and forward to the
 configured grafana cloud account.
