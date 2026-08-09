@@ -337,6 +337,11 @@ EOF
   # (a rebuilt box may reallocate it).
   SECRETS_UID="$(remote id -u viaduct-secrets 2>/dev/null || true)"
   if [[ -n "$SECRETS_UID" ]]; then
+    # Produced by the Hetzner node and interpolated below into a spire-server
+    # command string that runs as root on the hub. Digits only — a uid has no
+    # legitimate reason to contain anything a shell would act on.
+    vh_require vh_is_uid "viaduct-secrets uid (SECRETS_UID)" "$SECRETS_UID" || exit 1
+
     log "Registering the hetzner vault-agent SPIRE entry (uid ${SECRETS_UID})..."
     EID="$(gcp_ssh "sudo spire-server entry show -spiffeID spiffe://${TRUST_DOMAIN}/hetzner/vault-agent" 2>/dev/null | awk '/Entry ID/{print $NF}')"
     [[ -n "$EID" ]] && gcp_ssh "sudo spire-server entry delete -entryID ${EID}" >/dev/null 2>&1 || true
