@@ -227,6 +227,10 @@ resource "aws_instance" "spire" {
     k8s_alloy         = file("${path.module}/k8s/20-alloy.yaml")
     guardrail_script  = file("${path.module}/scripts/egress-guardrail.sh")
     crosscloud_script = file("${path.module}/scripts/crosscloud-bootstrap.sh")
+    # Shared mesh-trust helpers live at the repo root so both provisioners use one
+    # copy; crosscloud-bootstrap.sh runs from /opt/viaduct on the node, so the
+    # library is installed next to it by startup.sh.tpl.
+    mesh_trust_lib    = file("${path.module}/../scripts/lib/mesh-trust.sh")
   }))
   # IMDSv2 required (token-based) — aws_iid fetches the identity document here.
   metadata_options {

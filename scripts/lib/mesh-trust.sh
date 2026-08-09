@@ -90,14 +90,28 @@ vh_verify_cert_san() {
 # A SPIFFE trust bundle is a JWKS document with at least one key. `spire-server bundle
 # set` will accept a malformed or truncated document more readily than it should, so
 # callers validate before installing a federated root.
+# A grep for '"keys"' is NOT sufficient: a truncated response such as `{"keys":`
+# contains that substring, and `bundle set` would install it. The document must
+# actually parse. If neither jq nor python3 is present we fail closed rather than
+# degrade to a substring match.
 vh_is_spiffe_bundle() {
     local f="$1"
     [ -s "$f" ] || return 1
+
     if command -v jq >/dev/null 2>&1; then
         jq -e 'has("keys") and (.keys | type == "array") and (.keys | length > 0)' \
             "$f" >/dev/null 2>&1 || return 1
-    else
-        grep -q '"keys"' "$f" || return 1
+        return 0
     fi
-    return 0
+
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+sys.exit(0 if isinstance(d, dict) and isinstance(d.get("keys"), list) and d["keys"] else 1)' \
+            "$f" >/dev/null 2>&1 || return 1
+        return 0
+    fi
+
+    printf 'ERROR: neither jq nor python3 available to validate the SPIFFE bundle; refusing to install an unvalidated trust root.\n' >&2
+    return 1
 }

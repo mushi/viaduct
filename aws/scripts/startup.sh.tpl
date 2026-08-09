@@ -278,6 +278,10 @@ cat > /opt/viaduct/crosscloud.env <<EOF
 GCP_IP=$GCP_IP
 GCP_TRUST_DOMAIN=$GCP_TRUST_DOMAIN
 EOF
+install -d -m0755 /opt/viaduct/lib
+install -m0644 /dev/stdin /opt/viaduct/lib/mesh-trust.sh <<'MESHTRUST'
+${mesh_trust_lib}
+MESHTRUST
 install -m0755 /dev/stdin /opt/viaduct/crosscloud-bootstrap.sh <<'CROSSCLOUD'
 ${crosscloud_script}
 CROSSCLOUD
