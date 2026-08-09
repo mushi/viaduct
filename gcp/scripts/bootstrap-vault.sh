@@ -112,11 +112,35 @@ log "cert-auth policies ready"
 # ── gcp auth: operator admin + restore-agent + wireguard-hub roles ────────────
 has auth "gcp/" || vault auth enable gcp
 
+# Scoped to what this script actually calls. The role below is bound to the instance's
+# own service account, and any local uid on the hub can reach the GCE metadata server —
+# so a blanket sys/* + auth/* sudo grant made "root on the box" equal "root in Vault".
+# Narrowing does not change who can obtain the token; it changes what the token can do.
+# sudo is kept only on the two root-protected endpoints bootstrap genuinely needs
+# (mounting engines/auth methods, and generating the PKI root).
 vault policy write admin - <<'EOF'
-path "sys/*"  { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
-path "auth/*" { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
-path "kv/*"   { capabilities = ["create", "read", "update", "delete", "list"] }
-path "pki/*"  { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
+# `has secrets` / `has auth` list, then enable kv, pki, approle, cert and gcp.
+path "sys/mounts"            { capabilities = ["read", "list"] }
+path "sys/mounts/*"          { capabilities = ["create", "read", "update", "delete", "sudo"] }
+path "sys/auth"              { capabilities = ["read", "list"] }
+path "sys/auth/*"            { capabilities = ["create", "read", "update", "delete", "sudo"] }
+
+# vault policy write ...
+path "sys/policies/acl/*"    { capabilities = ["create", "read", "update", "delete", "list"] }
+
+# AppRoles, cert auth and the gcp roles this script provisions.
+path "auth/approle/role/*"   { capabilities = ["create", "read", "update", "delete", "list"] }
+path "auth/cert/certs/*"     { capabilities = ["create", "read", "update", "delete", "list"] }
+path "auth/gcp/role/*"       { capabilities = ["create", "read", "update", "delete", "list"] }
+
+# Secrets the operator manages.
+path "kv/*"                  { capabilities = ["create", "read", "update", "delete", "list"] }
+
+# PKI: read the existing root (the regeneration guard) and generate it once.
+path "pki/cert/*"            { capabilities = ["read", "list"] }
+path "pki/root/generate/*"   { capabilities = ["create", "update", "sudo"] }
+path "pki/roles/*"           { capabilities = ["create", "read", "update", "delete", "list"] }
+path "pki/issue/*"           { capabilities = ["create", "update"] }
 EOF
 vault write auth/gcp/role/admin type=gce project_id="$PROJECT" bound_zones="$ZONE" \
   bound_service_accounts="$SA_EMAIL" policies=admin token_ttl=20m token_max_ttl=2h >/dev/null
