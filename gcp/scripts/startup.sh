@@ -403,12 +403,31 @@ set -euo pipefail
 md() { curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/$1"; }
 export VAULT_ADDR="https://127.0.0.1:8200" VAULT_CACERT="/opt/vault/tls/vault.crt"
 TD="${1:-viaduct.aws}"
+
+# Whatever this resolves to becomes a Vault client CA for the aws-workload policy, and
+# TD itself lands in allowed_uri_sans. Constrain it to the two federated domains rather
+# than accepting any caller-supplied name.
+case "$TD" in
+  viaduct.aws|viaduct.gcp) ;;
+  *)
+    echo "ERROR: refusing to refresh a cert role for unexpected trust domain '${TD}'" >&2
+    echo "       Expected one of: viaduct.aws, viaduct.gcp" >&2
+    exit 1
+    ;;
+esac
+
 ROLE_ID="$(md instance/attributes/aws-certrole-approle-role-id)"
 SECRET_ID="$(cat /opt/vault-certrole/secret-id)"
 
 ca="$(mktemp)"; trap 'rm -f "$ca"' EXIT
 spire-server bundle list -id "spiffe://${TD}" -format pem > "$ca"
 [ -s "$ca" ] || { echo "ERROR: empty ${TD} bundle in the SPIRE store" >&2; exit 1; }
+# Non-empty is not enough: this is about to become an accepted client CA, so require
+# that it actually parses as a certificate.
+openssl x509 -in "$ca" -noout >/dev/null 2>&1 || {
+  echo "ERROR: ${TD} bundle is not a parseable PEM certificate; refusing to install it as a Vault client CA" >&2
+  exit 1
+}
 
 VAULT_TOKEN="$(vault write -field=token auth/approle/login role_id="$ROLE_ID" secret_id="$SECRET_ID")"
 export VAULT_TOKEN
