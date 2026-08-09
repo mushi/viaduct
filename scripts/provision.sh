@@ -261,7 +261,14 @@ if [[ -n "${GCP_SERVER_IP:-}" ]]; then
   HZ_PUB="$(remote cat /etc/wireguard/wg0.pub)"
   [[ -n "$HZ_PUB" ]] || { log "ERROR: Hetzner wg0.pub missing (cloud-init key-gen did not run)."; exit 1; }
 
-  REG_OUT="$(gcp_ssh "sudo /usr/local/bin/wg-register-peer.sh hetzner ${HZ_PUB} ${WG_MESH_IP}")"
+  # HZ_PUB is produced by the Hetzner node and is about to be interpolated into a
+  # string that gcloud hands to a shell on the HUB, under sudo. Non-empty is not a
+  # security check: root on the spoke could return "x; <command> #" and execute it
+  # as root on the control plane. Admit only the exact WireGuard key shape.
+  vh_require vh_is_wg_key  "Hetzner wg0.pub (HZ_PUB)" "$HZ_PUB"   || exit 1
+  vh_require vh_is_mesh_ip "mesh IP (WG_MESH_IP)"     "$WG_MESH_IP" || exit 1
+
+  REG_OUT="$(gcp_ssh "sudo /usr/local/bin/wg-register-peer.sh hetzner '${HZ_PUB}' '${WG_MESH_IP}'")"
   HUB_PUB="$(printf '%s\n' "$REG_OUT" | awk '/^hub_public_key /{print $2}')"
   WG_PSK="$(printf  '%s\n' "$REG_OUT" | awk '/^psk /{print $2}')"
   [[ -n "$HUB_PUB" && -n "$WG_PSK" ]] || { log "ERROR: hub registration returned no key/psk. Is GCP on the current startup.sh?"; exit 1; }
