@@ -9,6 +9,11 @@
 # cert-auths to Vault as hetzner-vault-agent, scoped to kv/hetzner/*.
 set -euo pipefail
 
+# Mesh preconditions for the trust-on-first-use fetch below. See the comments in the
+# library: After=wg-quick@wg0.service orders unit start, not peer authentication.
+# shellcheck source=scripts/lib/mesh-trust.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/mesh-trust.sh"
+
 SPIRE_SOCK="/run/spire-agent/public/api.sock"
 HUB_MESH_IP="10.99.0.1"                 # GCP hub over wg0
 VAULT_ADDR="https://${HUB_MESH_IP}:8200"
@@ -28,10 +33,15 @@ for attempt in $(seq 1 12); do
   sleep 5
 done
 
-# 2. GCP Vault's CURRENT listener cert, fetched over the mesh. WireGuard has already
-#    authenticated that ${HUB_MESH_IP} is the GCP hub, so this trust-on-first-use is
-#    sound and always reflects the current cert (which rotates on a GCP rebuild).
+# 2. GCP Vault's CURRENT listener cert, fetched over the mesh. WireGuard authenticates
+#    that ${HUB_MESH_IP} is the GCP hub, so this trust-on-first-use is sound and always
+#    reflects the current cert (which rotates on a GCP rebuild) — but only once a peer
+#    handshake has actually happened. systemd's After=wg-quick@wg0.service does not
+#    guarantee that, so wait for it explicitly, then fail closed on a certificate that
+#    cannot be the hub's.
+vh_wait_for_mesh_handshake "$HUB_MESH_IP" wg0 60 || exit 1
 openssl s_client -connect "${HUB_MESH_IP}:8200" </dev/null 2>/dev/null | openssl x509 > "$CACERT"
+vh_verify_cert_san "$CACERT" "$HUB_MESH_IP" || exit 1
 
 # 3. Cert-auth to Vault with the SVID (role hetzner-vault-agent, scoped to kv/hetzner/*).
 #    Uses the Vault HTTP API via curl + jq, so the data-plane box needs no Vault binary.

@@ -131,6 +131,7 @@ data "cloudinit_config" "conduit" {
       vless_sni             = var.vless_sni
       vless_domain          = var.vless_domain
       fetch_secrets_script  = file("${path.module}/scripts/fetch-hetzner-secrets.sh")
+      mesh_trust_lib        = file("${path.module}/scripts/lib/mesh-trust.sh")
       xray_exporter_version = var.xray_exporter_version
       xray_exporter_sha256  = var.xray_exporter_sha256
       alloy_version         = var.alloy_version
