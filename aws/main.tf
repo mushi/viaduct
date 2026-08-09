@@ -123,23 +123,43 @@ resource "aws_iam_role_policy" "kms" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "kms:CreateKey",
-        "kms:DescribeKey",
-        "kms:GetPublicKey",
-        "kms:ListKeys",
-        "kms:ListAliases",
-        "kms:CreateAlias",
-        "kms:UpdateAlias",
-        "kms:DeleteAlias",
-        "kms:Sign",
-        "kms:ScheduleKeyDeletion",
-        "kms:TagResource"
-      ]
-      Resource = "*"
-    }]
+    Statement = [
+      # Non-destructive operations. kms:CreateKey and the List* actions cannot be
+      # resource-scoped by AWS, so these keep Resource "*"; the blast radius is
+      # enumeration and key creation, not destruction.
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:CreateKey",
+          "kms:DescribeKey",
+          "kms:GetPublicKey",
+          "kms:ListKeys",
+          "kms:ListAliases",
+          "kms:CreateAlias",
+          "kms:Sign",
+          "kms:TagResource"
+        ]
+        Resource = "*"
+      },
+      # Destructive operations, scoped to the keys SPIRE actually manages. The
+      # aws_kms KeyManager addresses its keys through aliases under SPIRE_SERVER/,
+      # so kms:ResourceAliases confines deletion to those. Without this the instance
+      # role could schedule deletion of any KMS key in the account.
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:ScheduleKeyDeletion",
+          "kms:UpdateAlias",
+          "kms:DeleteAlias"
+        ]
+        Resource = "*"
+        Condition = {
+          "ForAnyValue:StringLike" = {
+            "kms:ResourceAliases" = ["alias/SPIRE_SERVER/*"]
+          }
+        }
+      }
+    ]
   })
 }
 
