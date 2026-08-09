@@ -148,9 +148,20 @@ resource "google_storage_bucket" "vault_snapshots" {
   }
 }
 
-resource "google_storage_bucket_iam_member" "vault_snapshots" {
+# The snapshot writer only ever creates new objects; the rebuild path only reads them.
+# objectAdmin additionally carries storage.objects.delete, which would let a compromised
+# control plane erase the very snapshots this bucket exists to preserve — defeating
+# prevent_destroy and versioning, the documented recovery control. Creator + Viewer keeps
+# backup and restore working without granting deletion.
+resource "google_storage_bucket_iam_member" "vault_snapshots_create" {
   bucket = google_storage_bucket.vault_snapshots.name
-  role   = "roles/storage.objectAdmin"
+  role   = "roles/storage.objectCreator"
+  member = "serviceAccount:${google_service_account.controlplane.email}"
+}
+
+resource "google_storage_bucket_iam_member" "vault_snapshots_read" {
+  bucket = google_storage_bucket.vault_snapshots.name
+  role   = "roles/storage.objectViewer"
   member = "serviceAccount:${google_service_account.controlplane.email}"
 }
 
