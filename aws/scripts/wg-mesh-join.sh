@@ -31,6 +31,12 @@ command -v jq     >/dev/null || { echo "ERROR: jq not found."        >&2; exit 1
 GCP_KEY="${GCP_SSH_KEY_PATH/#\~/$HOME}"
 log() { echo "[wg-mesh-join] $*"; }
 
+# Shared allowlists, also used by scripts/provision.sh. Both provisioners feed
+# node-authored values into root command strings executed on another host, so the
+# validation lives in one place rather than being restated (and drifting) per script.
+# shellcheck source=../../scripts/lib/provision-guards.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts/lib" && pwd)/provision-guards.sh"
+
 # Run one shell command on the AWS box via SSM Run Command (executes as root),
 # print its stdout, and return non-zero if it did not succeed. The command is
 # JSON-encoded with jq so arbitrary text is safe.
@@ -71,13 +77,28 @@ for _ in $(seq 1 60); do
   sleep 15
 done
 [ -n "$AWS_PUB" ] || { log "ERROR: AWS box not SSM-ready or wg0.pub absent after ~15min. Check the SSM agent registration and user_data (§11)."; exit 1; }
+
+# The `tr -d '[:space:]'` above normalizes the SSM stdout; it is NOT a security
+# control. It deletes literal whitespace but leaves ';', '&', '|', backticks and
+# command substitution intact, and ${IFS} — which contains no literal whitespace —
+# expands back to a space in the hub's shell. AWS_PUB is about to be interpolated
+# into a string that runs as root on the hub, so admit only the exact key shape.
+vh_require vh_is_wg_key  "AWS wg0.pub (AWS_PUB)" "$AWS_PUB"    || exit 1
+vh_require vh_is_mesh_ip "mesh IP (WG_MESH_IP)"  "$WG_MESH_IP" || exit 1
 log "AWS node ready; public key retrieved."
 
 log "Registering with the hub ${GCP_INSTANCE} over IAP..."
-REG_OUT="$(gcp_ssh "sudo /usr/local/bin/wg-register-peer.sh aws ${AWS_PUB} ${WG_MESH_IP}")"
+REG_OUT="$(gcp_ssh "sudo /usr/local/bin/wg-register-peer.sh aws '${AWS_PUB}' '${WG_MESH_IP}'")"
 HUB_PUB="$(printf '%s\n' "$REG_OUT" | awk '/^hub_public_key /{print $2}')"
 WG_PSK="$(printf  '%s\n' "$REG_OUT" | awk '/^psk /{print $2}')"
 [ -n "$HUB_PUB" ] && [ -n "$WG_PSK" ] || { log "ERROR: hub returned no key/psk (is GCP on the current startup.sh?)."; exit 1; }
+
+# HUB_PUB is interpolated into the REMOTE heredoc below, which is base64'd and run
+# through `base64 -d | bash` as root on the box. A reply carrying a newline plus
+# "CONF" closes the inner config heredoc and everything after it becomes root shell
+# commands on the spoke. WG_PSK goes to SSM Parameter Store on the same reply.
+vh_require vh_is_wg_key "hub public key (HUB_PUB)"   "$HUB_PUB" || exit 1
+vh_require vh_is_wg_key "mesh preshared key (WG_PSK)" "$WG_PSK"  || exit 1
 
 log "Staging the PSK in SSM Parameter Store (SecureString)..."
 aws ssm put-parameter --region "$AWS_REGION" --name "$PSK_PARAM" \

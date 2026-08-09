@@ -24,6 +24,11 @@ set -euo pipefail
 : "${ALLOY_CONFIG:?}"
 : "${PROBE_SRC:?}"
 
+# Shared guards: host-key pinning + the allowlists applied to any value that a
+# remote node produces before it is interpolated into a root command elsewhere.
+# shellcheck source=scripts/lib/provision-guards.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/provision-guards.sh"
+
 # Expand ~ in SSH_KEY_PATH (Terraform passes it literally if set in tfvars)
 SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$HOME}"
 
@@ -94,11 +99,15 @@ download() {
 #      (status stuck 'running', sentinel never written) can't stall for ~an hour.
 
 # A `terraform -replace` rebuild keeps the static IP but regenerates the SSH
-# host keys. Drop any stale key for this IP from our dedicated known_hosts so
-# the SSH below can accept-new the fresh key instead of hard-failing on a
-# changed host key (StrictHostKeyChecking=accept-new rejects *changed* keys).
-# Mirrors the same treatment applied to the GCP host below.
-ssh-keygen -R "${SERVER_IP}" -f "${BACKUPS_DIR}/known_hosts" >/dev/null 2>&1 || true
+# host keys, so the stale pin has to go before the SSH below can accept-new the
+# fresh one. That is a deliberate, infrequent act: dropping the pin on *every*
+# apply meant accept-new re-trusted whatever key answered for SERVER_IP, which
+# is precisely the check that catches an on-path attacker.
+#
+# Set VIADUCT_HOST_KEY_RESET=1 when you are knowingly rebuilding. Otherwise the
+# pin is kept, and a genuinely changed key surfaces as the host-key failure
+# handled in Phase A below — which prints the exact command to clear it.
+vh_reset_host_key_pin_if_requested "${SERVER_IP}" "${BACKUPS_DIR}/known_hosts"
 
 # ── Phase A: wait for SSH to succeed (bounded ~10 min); establishes the master.
 log "Waiting for ${SERVER_IP} to accept SSH (up to 10 min)..."
@@ -252,10 +261,24 @@ if [[ -n "${GCP_SERVER_IP:-}" ]]; then
   HZ_PUB="$(remote cat /etc/wireguard/wg0.pub)"
   [[ -n "$HZ_PUB" ]] || { log "ERROR: Hetzner wg0.pub missing (cloud-init key-gen did not run)."; exit 1; }
 
-  REG_OUT="$(gcp_ssh "sudo /usr/local/bin/wg-register-peer.sh hetzner ${HZ_PUB} ${WG_MESH_IP}")"
+  # HZ_PUB is produced by the Hetzner node and is about to be interpolated into a
+  # string that gcloud hands to a shell on the HUB, under sudo. Non-empty is not a
+  # security check: root on the spoke could return "x; <command> #" and execute it
+  # as root on the control plane. Admit only the exact WireGuard key shape.
+  vh_require vh_is_wg_key  "Hetzner wg0.pub (HZ_PUB)" "$HZ_PUB"   || exit 1
+  vh_require vh_is_mesh_ip "mesh IP (WG_MESH_IP)"     "$WG_MESH_IP" || exit 1
+
+  REG_OUT="$(gcp_ssh "sudo /usr/local/bin/wg-register-peer.sh hetzner '${HZ_PUB}' '${WG_MESH_IP}'")"
   HUB_PUB="$(printf '%s\n' "$REG_OUT" | awk '/^hub_public_key /{print $2}')"
   WG_PSK="$(printf  '%s\n' "$REG_OUT" | awk '/^psk /{print $2}')"
   [[ -n "$HUB_PUB" && -n "$WG_PSK" ]] || { log "ERROR: hub registration returned no key/psk. Is GCP on the current startup.sh?"; exit 1; }
+
+  # Both values come from the hub's reply and are interpolated into the unquoted
+  # wg0.conf heredoc below. A reply carrying a newline would not corrupt one value
+  # — it would add WireGuard directives (an AllowedIPs = 0.0.0.0/0 and an attacker
+  # Endpoint route this node's traffic). The key shape admits no newline.
+  vh_require vh_is_wg_key "hub public key (HUB_PUB)" "$HUB_PUB" || exit 1
+  vh_require vh_is_wg_key "mesh preshared key (WG_PSK)" "$WG_PSK" || exit 1
 
   # %i stays literal for wg-quick; the heredoc is unquoted so the vars expand.
   WG_CONF="$(cat <<EOF
@@ -314,6 +337,11 @@ EOF
   # (a rebuilt box may reallocate it).
   SECRETS_UID="$(remote id -u viaduct-secrets 2>/dev/null || true)"
   if [[ -n "$SECRETS_UID" ]]; then
+    # Produced by the Hetzner node and interpolated below into a spire-server
+    # command string that runs as root on the hub. Digits only — a uid has no
+    # legitimate reason to contain anything a shell would act on.
+    vh_require vh_is_uid "viaduct-secrets uid (SECRETS_UID)" "$SECRETS_UID" || exit 1
+
     log "Registering the hetzner vault-agent SPIRE entry (uid ${SECRETS_UID})..."
     EID="$(gcp_ssh "sudo spire-server entry show -spiffeID spiffe://${TRUST_DOMAIN}/hetzner/vault-agent" 2>/dev/null | awk '/Entry ID/{print $NF}')"
     [[ -n "$EID" ]] && gcp_ssh "sudo spire-server entry delete -entryID ${EID}" >/dev/null 2>&1 || true
