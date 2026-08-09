@@ -24,6 +24,11 @@ set -euo pipefail
 : "${ALLOY_CONFIG:?}"
 : "${PROBE_SRC:?}"
 
+# Shared guards: host-key pinning + the allowlists applied to any value that a
+# remote node produces before it is interpolated into a root command elsewhere.
+# shellcheck source=scripts/lib/provision-guards.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/provision-guards.sh"
+
 # Expand ~ in SSH_KEY_PATH (Terraform passes it literally if set in tfvars)
 SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$HOME}"
 
@@ -94,11 +99,15 @@ download() {
 #      (status stuck 'running', sentinel never written) can't stall for ~an hour.
 
 # A `terraform -replace` rebuild keeps the static IP but regenerates the SSH
-# host keys. Drop any stale key for this IP from our dedicated known_hosts so
-# the SSH below can accept-new the fresh key instead of hard-failing on a
-# changed host key (StrictHostKeyChecking=accept-new rejects *changed* keys).
-# Mirrors the same treatment applied to the GCP host below.
-ssh-keygen -R "${SERVER_IP}" -f "${BACKUPS_DIR}/known_hosts" >/dev/null 2>&1 || true
+# host keys, so the stale pin has to go before the SSH below can accept-new the
+# fresh one. That is a deliberate, infrequent act: dropping the pin on *every*
+# apply meant accept-new re-trusted whatever key answered for SERVER_IP, which
+# is precisely the check that catches an on-path attacker.
+#
+# Set VIADUCT_HOST_KEY_RESET=1 when you are knowingly rebuilding. Otherwise the
+# pin is kept, and a genuinely changed key surfaces as the host-key failure
+# handled in Phase A below — which prints the exact command to clear it.
+vh_reset_host_key_pin_if_requested "${SERVER_IP}" "${BACKUPS_DIR}/known_hosts"
 
 # ── Phase A: wait for SSH to succeed (bounded ~10 min); establishes the master.
 log "Waiting for ${SERVER_IP} to accept SSH (up to 10 min)..."
