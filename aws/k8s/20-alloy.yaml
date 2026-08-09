@@ -51,10 +51,26 @@ spec:
           set -e
           # The vault image (Alpine) has no openssl; add it to fetch GCP's cert.
           apk add --no-cache openssl >/dev/null
-          # Fetch GCP Vault's current listener cert over the mesh. WireGuard already
-          # authenticates the peer, so this trust-on-first-use is sound and always current
-          # (it rotates on a GCP rebuild). No pinned fingerprint, no vault-ca ConfigMap.
+          # Fetch GCP Vault's current listener cert over the mesh. WireGuard authenticates
+          # the peer, so this trust-on-first-use is sound and always current (it rotates on
+          # a GCP rebuild). No pinned fingerprint, no vault-ca ConfigMap.
+          #
+          # But fetching the cert from the endpoint it then verifies is a tautology on its
+          # own: whatever answers is trusted, and the SVID client cert is handed to it. The
+          # listener cert carries the control-plane mesh IP in its SANs (see gcp/outputs.tf),
+          # so require that before using it as the CA. A pod cannot source
+          # scripts/lib/mesh-trust.sh, so the check is inlined here; keep it in step with
+          # vh_verify_cert_san.
           openssl s_client -connect __GCP_CONTROL_PLANE_IP__:8200 </dev/null 2>/dev/null | openssl x509 > /tmp/vault-ca.crt
+          if ! openssl x509 -in /tmp/vault-ca.crt -noout -checkend 0 >/dev/null 2>&1; then
+            echo "ERROR: control-plane certificate is empty, unparseable or expired; refusing to use it as the Vault CA" >&2
+            exit 1
+          fi
+          if ! openssl x509 -in /tmp/vault-ca.crt -noout -ext subjectAltName 2>/dev/null \
+               | grep -qE "IP Address:__GCP_CONTROL_PLANE_IP__([^0-9]|$)"; then
+            echo "ERROR: certificate served at __GCP_CONTROL_PLANE_IP__:8200 does not list that IP in its subjectAltName; refusing to present the SVID to it" >&2
+            exit 1
+          fi
           export VAULT_CACERT=/tmp/vault-ca.crt
           vault login -method=cert -client-cert=/svids/svid.0.pem -client-key=/svids/svid.0.key name=aws-vault-agent >/dev/null
           U=$(vault kv get -field=prometheus_user kv/aws/grafana)
