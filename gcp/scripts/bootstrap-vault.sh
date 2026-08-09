@@ -153,9 +153,15 @@ EOF
 vault write auth/gcp/role/restore-agent type=gce project_id="$PROJECT" bound_zones="$ZONE" \
   bound_service_accounts="$SA_EMAIL" policies=restore-secret-ids token_ttl=5m token_max_ttl=10m >/dev/null
 
+# Split the peer registry from the hub's own key. A blanket kv/data/wireguard/* grant
+# let a token from this role replace kv/wireguard/hub — the hub's WireGuard private key —
+# and take over the mesh, rather than merely registering spokes. startup.sh:400 notes the
+# hub key is generated once then only fetched, and the write at :477 runs only when it is
+# absent, so create+read is sufficient there.
 vault policy write wireguard-hub - <<'EOF'
-path "kv/data/wireguard/*"     { capabilities = ["create", "read", "update"] }
-path "kv/metadata/wireguard/*" { capabilities = ["read", "list"] }
+path "kv/data/wireguard/peers/*"     { capabilities = ["create", "read", "update"] }
+path "kv/data/wireguard/hub"         { capabilities = ["create", "read"] }
+path "kv/metadata/wireguard/*"       { capabilities = ["read", "list"] }
 EOF
 vault write auth/gcp/role/wireguard-hub type=gce project_id="$PROJECT" bound_zones="$ZONE" \
   bound_service_accounts="$SA_EMAIL" policies=wireguard-hub token_ttl=5m token_max_ttl=10m >/dev/null
