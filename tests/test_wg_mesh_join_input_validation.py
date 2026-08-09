@@ -38,6 +38,15 @@ def after_tr(value: str) -> str:
     ).stdout
 
 
+def uncommented(lines):
+    """Source lines with comment-only lines dropped.
+
+    The wiring assertions must not be satisfied by a guard that has been
+    commented out — that would pass while the vulnerability is live again.
+    """
+    return "\n".join(l for l in lines if not l.lstrip().startswith("#"))
+
+
 class AwsPubAllowlistTest(unittest.TestCase):
     def test_accepts_a_genuine_key(self):
         self.assertTrue(accepts(VALID_KEY))
@@ -71,7 +80,7 @@ class JoinScriptWiringTest(unittest.TestCase):
         except StopIteration:
             self.fail("could not locate the wg-register-peer.sh call site for AWS_PUB")
 
-        preceding = "\n".join(lines[:sink])
+        preceding = uncommented(lines[:sink])
         self.assertIn(
             "provision-guards.sh", preceding,
             "wg-mesh-join.sh must source the shared guard library",

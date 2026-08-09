@@ -43,6 +43,15 @@ def run_validator(fn: str, value: str) -> int:
     ).returncode
 
 
+def uncommented(lines):
+    """Source lines with comment-only lines dropped.
+
+    The wiring assertions must not be satisfied by a guard that has been
+    commented out — that would pass while the vulnerability is live again.
+    """
+    return "\n".join(l for l in lines if not l.lstrip().startswith("#"))
+
+
 class WireGuardKeyAllowlistTest(unittest.TestCase):
     def test_accepts_a_genuine_wireguard_key(self):
         self.assertEqual(
@@ -85,7 +94,7 @@ class ProvisionWiringTest(unittest.TestCase):
         except StopIteration:
             self.fail("could not locate the wg-register-peer.sh call site for HZ_PUB")
 
-        preceding = "\n".join(lines[:sink])
+        preceding = uncommented(lines[:sink])
         self.assertIn(
             "vh_require", preceding,
             "HZ_PUB reaches the hub command string without passing a vh_require "

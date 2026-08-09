@@ -24,6 +24,15 @@ def accepts(value: str) -> bool:
     ).returncode == 0
 
 
+def uncommented(lines):
+    """Source lines with comment-only lines dropped.
+
+    The wiring assertions must not be satisfied by a guard that has been
+    commented out — that would pass while the vulnerability is live again.
+    """
+    return "\n".join(l for l in lines if not l.lstrip().startswith("#"))
+
+
 class UidAllowlistTest(unittest.TestCase):
     def test_accepts_a_real_uid(self):
         for uid in ["0", "999", "1000", "4294967294"]:
@@ -62,7 +71,7 @@ class ProvisionWiringTest(unittest.TestCase):
         except StopIteration:
             self.fail("could not locate the spire-server entry create call using SECRETS_UID")
 
-        preceding = "\n".join(lines[:sink])
+        preceding = uncommented(lines[:sink])
         self.assertRegex(
             preceding, r"vh_require\s+vh_is_uid.*SECRETS_UID",
             "SECRETS_UID reaches the root-executed spire-server command without a "

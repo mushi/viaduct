@@ -26,6 +26,15 @@ def validates(value: str) -> bool:
     ).returncode == 0
 
 
+def uncommented(lines):
+    """Source lines with comment-only lines dropped.
+
+    The wiring assertions must not be satisfied by a guard that has been
+    commented out — that would pass while the vulnerability is live again.
+    """
+    return "\n".join(l for l in lines if not l.lstrip().startswith("#"))
+
+
 class HubReplyAllowlistTest(unittest.TestCase):
     def test_rejects_a_key_carrying_extra_directives(self):
         payload = VALID_KEY + "\nAllowedIPs = 0.0.0.0/0\nEndpoint = attacker.example:51820"
@@ -52,7 +61,7 @@ class ProvisionWiringTest(unittest.TestCase):
         except StopIteration:
             self.fail("could not locate the wg0.conf heredoc that interpolates HUB_PUB")
 
-        preceding = "\n".join(lines[:heredoc])
+        preceding = uncommented(lines[:heredoc])
         self.assertRegex(
             preceding, r"vh_require\s+vh_is_wg_key.*HUB_PUB",
             "HUB_PUB reaches the wg0.conf heredoc without an allowlist check",
