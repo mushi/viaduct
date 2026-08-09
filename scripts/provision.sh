@@ -273,6 +273,13 @@ if [[ -n "${GCP_SERVER_IP:-}" ]]; then
   WG_PSK="$(printf  '%s\n' "$REG_OUT" | awk '/^psk /{print $2}')"
   [[ -n "$HUB_PUB" && -n "$WG_PSK" ]] || { log "ERROR: hub registration returned no key/psk. Is GCP on the current startup.sh?"; exit 1; }
 
+  # Both values come from the hub's reply and are interpolated into the unquoted
+  # wg0.conf heredoc below. A reply carrying a newline would not corrupt one value
+  # — it would add WireGuard directives (an AllowedIPs = 0.0.0.0/0 and an attacker
+  # Endpoint route this node's traffic). The key shape admits no newline.
+  vh_require vh_is_wg_key "hub public key (HUB_PUB)" "$HUB_PUB" || exit 1
+  vh_require vh_is_wg_key "mesh preshared key (WG_PSK)" "$WG_PSK" || exit 1
+
   # %i stays literal for wg-quick; the heredoc is unquoted so the vars expand.
   WG_CONF="$(cat <<EOF
 [Interface]
