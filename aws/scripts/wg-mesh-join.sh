@@ -93,6 +93,13 @@ HUB_PUB="$(printf '%s\n' "$REG_OUT" | awk '/^hub_public_key /{print $2}')"
 WG_PSK="$(printf  '%s\n' "$REG_OUT" | awk '/^psk /{print $2}')"
 [ -n "$HUB_PUB" ] && [ -n "$WG_PSK" ] || { log "ERROR: hub returned no key/psk (is GCP on the current startup.sh?)."; exit 1; }
 
+# HUB_PUB is interpolated into the REMOTE heredoc below, which is base64'd and run
+# through `base64 -d | bash` as root on the box. A reply carrying a newline plus
+# "CONF" closes the inner config heredoc and everything after it becomes root shell
+# commands on the spoke. WG_PSK goes to SSM Parameter Store on the same reply.
+vh_require vh_is_wg_key "hub public key (HUB_PUB)"   "$HUB_PUB" || exit 1
+vh_require vh_is_wg_key "mesh preshared key (WG_PSK)" "$WG_PSK"  || exit 1
+
 log "Staging the PSK in SSM Parameter Store (SecureString)..."
 aws ssm put-parameter --region "$AWS_REGION" --name "$PSK_PARAM" \
   --type SecureString --value "$WG_PSK" --overwrite >/dev/null
