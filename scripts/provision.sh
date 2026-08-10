@@ -66,8 +66,13 @@ remote() { $SSH -- sudo "$@"; }
 upload() {
   local src="$1" dst="$2" perms="${3:-0644}"
   # deploy can't write system paths directly; stage in /tmp, then install as root.
+  # $$ is the local provisioner's PID and the basename is known, so the old
+  # /tmp/prov.$$.<name> path was guessable by any account on the target. A file or
+  # symlink pre-created there receives the uploaded content — which includes
+  # keypair.env and client UUIDs. Let the remote side pick an unpredictable name.
   local stage
-  stage="/tmp/prov.$$.$(basename "$dst")"
+  stage="$($SSH -- 'umask 077; mktemp /tmp/prov.XXXXXXXXXX')"
+  [ -n "$stage" ] || { log "ERROR: could not create a staging file on ${SERVER_IP}"; return 1; }
   $SCP "$src" "deploy@${SERVER_IP}:${stage}"
   remote install -m "$perms" "$stage" "$dst"
   $SSH -- rm -f "$stage"
@@ -78,7 +83,9 @@ download() {
   local src="$1" dst="$2"
   # Sources are root-owned/0600 → read via sudo cat. Stage to .partial so a
   # missing source never leaves a truncated file in backups/.
-  if remote cat "$src" > "$dst.partial" 2>/dev/null; then
+  # Create the partial file private: a redirect at the ambient umask leaves retrieved
+  # key material world-readable on the operator workstation until the chmod lands.
+  if ( umask 077; remote cat "$src" > "$dst.partial" 2>/dev/null ); then
     mv "$dst.partial" "$dst"
     chmod 600 "$dst"
   else
