@@ -40,7 +40,13 @@ users:
       - ${ops_ssh_public_key}
     # Genuine least-privilege for interactive debugging: inspect + service
     # lifecycle only, no file writes (systemctl fixed to status/restart/reload).
-    sudo: "ALL=(root) NOPASSWD: /usr/bin/systemctl status *, /usr/bin/systemctl restart *, /usr/bin/systemctl reload *, /usr/bin/journalctl *, /usr/bin/wg show, /usr/bin/wg show *"
+    # journalctl and wg are reached only through wrappers: a sudo wildcard matches
+    # the entire remaining argument string, so `journalctl *` also granted
+    # --vacuum-time (destroying the audit record) and `wg show *` also granted
+    # `wg show wg0 private-key`. Narrowing the patterns cannot exclude either;
+    # the wrappers take fixed arguments instead. The wildcard below is on the
+    # wrapper, which validates its own input — that is where the boundary lives.
+    sudo: "ALL=(root) NOPASSWD: /usr/bin/systemctl status *, /usr/bin/systemctl restart *, /usr/bin/systemctl reload *, /usr/local/bin/ops-journal, /usr/local/bin/ops-journal *, /usr/local/bin/ops-wg-status"
 
 write_files:
 
@@ -52,6 +58,119 @@ write_files:
       PermitRootLogin no
       PasswordAuthentication no
       AllowUsers deploy ops
+
+  # ── SPIRE join token setter ───────────────────────────────────────────────
+  # The provisioner mints a one-time join token on the GCP SPIRE server and has to
+  # get it onto this node. It used to arrive as JOIN_TOKEN_ARG=-joinToken <token>
+  # in an EnvironmentFile, which systemd expanded into the agent's ExecStart — so
+  # the token sat in /proc/<pid>/cmdline, world-readable, for as long as the agent
+  # ran. Any local process could read it and attest as this node. It now goes into
+  # the root-only agent.conf, piped in over stdin so it never appears in argv here
+  # either.
+
+  - path: /usr/local/sbin/spire-agent-join-token
+    owner: root:root
+    permissions: "0700"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      CONF=/opt/spire/agent/agent.conf
+
+      read -r token
+      # SPIRE tokens are UUIDs. Validate before interpolating into HCL, and reject
+      # rather than write something that would change the agent's configuration.
+      case "$token" in
+        "" | *[!A-Za-z0-9-]* )
+          echo "spire-agent-join-token: token outside [A-Za-z0-9-]; refusing" >&2
+          exit 64 ;;
+      esac
+
+      umask 077
+      tmp="$(mktemp "$CONF.XXXXXXXX")"
+      # Drop any token from a previous provision and place the current one inside the
+      # agent block — the first block in the file, so the first bare closing brace is
+      # its own. Done in bash rather than sed: `0,/re/` addressing and \n in the
+      # replacement are GNU extensions, and this has to behave identically wherever
+      # it is exercised.
+      set -f
+      inserted=0
+      while IFS= read -r line || [ -n "$line" ]; do
+        set -- $line
+        [ "$${1:-}" = "join_token" ] && continue
+        if [ "$inserted" -eq 0 ] && [ "$line" = "}" ]; then
+          printf '  join_token        = "%s"\n' "$token" >> "$tmp"
+          inserted=1
+        fi
+        printf '%s\n' "$line" >> "$tmp"
+      done < "$CONF"
+      set +f
+
+      if [ "$inserted" -ne 1 ]; then
+        echo "spire-agent-join-token: no agent block found in $CONF; refusing" >&2
+        rm -f "$tmp"
+        exit 1
+      fi
+
+      chmod 0600 "$tmp"
+      mv "$tmp" "$CONF"
+
+      # Residue from the argv-based scheme, if this node predates the change.
+      rm -f /opt/spire/agent/join.env
+
+  # ── ops privilege wrappers ────────────────────────────────────────────────
+  # Both exist because sudo wildcards match the whole argument string. They are
+  # the only way ops reaches journalctl or wg, and they accept no pass-through
+  # arguments — only a keyword the script itself resolves to a fixed command.
+
+  - path: /usr/local/bin/ops-journal
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # Read-only journal access for the units this node actually runs. The unit
+      # name is matched against the allowlist and the *matched literal* is what
+      # journalctl receives, so nothing the caller typed is ever passed through.
+      set -euo pipefail
+
+      ALLOWED="conduit xray xray-probe-client xray-exporter xray-user-stats probe alloy hetzner-secrets nginx ssh wg-quick@wg0"
+
+      usage() {
+        echo "usage: sudo ops-journal <unit> [follow]" >&2
+        echo "units: $ALLOWED" >&2
+        exit 64
+      }
+
+      [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage
+
+      unit=""
+      for u in $ALLOWED; do
+        if [ "$u" = "$1" ]; then unit="$u"; break; fi
+      done
+      [ -n "$unit" ] || { echo "ops-journal: '$1' is not an inspectable unit" >&2; usage; }
+
+      case "$${2:-}" in
+        "")     exec /usr/bin/journalctl --no-pager -n 500 -u "$unit" ;;
+        follow) exec /usr/bin/journalctl --no-pager -n 100 -f -u "$unit" ;;
+        *)      usage ;;
+      esac
+
+  - path: /usr/local/bin/ops-wg-status
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # Mesh status without the key material. Bare `wg show` prints
+      # "private key: (hidden)"; `wg show <if> dump` prints it in full, which is
+      # why no interface or subcommand argument is accepted here.
+      set -euo pipefail
+
+      if [ "$#" -ne 0 ]; then
+        echo "usage: sudo ops-wg-status   (takes no arguments)" >&2
+        exit 64
+      fi
+
+      exec /usr/bin/wg show
 
   # ── Conduit systemd unit ──────────────────────────────────────────────────
   - path: /etc/systemd/system/conduit.service
@@ -506,22 +625,51 @@ write_files:
 
       # ── Reality keypair ───────────────────────────────────────────────────
       if [[ ! -f "$KEYPAIR_FILE" ]]; then
-        /usr/local/bin/xray x25519 > /tmp/xray-x25519.txt 2>&1
-        PRIVATE_KEY=$(awk '/PrivateKey:/  {print $NF}' /tmp/xray-x25519.txt)
-        PUBLIC_KEY=$(awk  '/PublicKey/    {print $NF}' /tmp/xray-x25519.txt)
+        # Everything created in this branch is Reality key material. Set the umask once
+        # here so each file is created 0600, instead of being written world-readable and
+        # chmod-ed a moment later.
+        umask 077
+        # Predictable path + ambient umask meant the Reality private key was briefly
+        # readable by any local account (and the fixed name invites a pre-created
+        # symlink). mktemp under umask 077 removes both; the trap covers an early exit.
+        XKEY_TMP="$(umask 077; mktemp)"
+        trap 'rm -f "$XKEY_TMP"' RETURN EXIT
+        /usr/local/bin/xray x25519 > "$XKEY_TMP" 2>&1
+        PRIVATE_KEY=$(awk '/PrivateKey:/  {print $NF}' "$XKEY_TMP")
+        PUBLIC_KEY=$(awk  '/PublicKey/    {print $NF}' "$XKEY_TMP")
         SHORT_ID=$(openssl rand -hex 8)
-        rm -f /tmp/xray-x25519.txt
+        rm -f "$XKEY_TMP"
         if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" ]]; then
           echo "ERROR: failed to parse xray x25519 output — check format" >&2
           exit 1
         fi
         printf 'PRIVATE_KEY=%s\nPUBLIC_KEY=%s\nSHORT_ID=%s\n' \
           "$PRIVATE_KEY" "$PUBLIC_KEY" "$SHORT_ID" > "$KEYPAIR_FILE"
-        chmod 600 "$KEYPAIR_FILE"
+        chmod 600 "$KEYPAIR_FILE"   # belt and braces; the umask above governs creation
         echo "Generated new Reality keypair."
       else
-        # shellcheck source=/dev/null
-        source "$KEYPAIR_FILE"
+        # Parse, never source. `source` executes the backup as shell, so a tampered or
+        # merely corrupted keypair.env would run arbitrary commands as root on a freshly
+        # replaced node — at the exact moment the operator is trusting the restore path.
+        # Read only the three expected keys, and only when the line has the exact
+        # KEY=value shape; anything else is ignored rather than evaluated.
+        PRIVATE_KEY=""; PUBLIC_KEY=""; SHORT_ID=""
+        while IFS= read -r kp_line || [ -n "$kp_line" ]; do
+          case "$kp_line" in
+            PRIVATE_KEY=*) kp_val="$${kp_line#PRIVATE_KEY=}" ; kp_name=PRIVATE_KEY ;;
+            PUBLIC_KEY=*)  kp_val="$${kp_line#PUBLIC_KEY=}"  ; kp_name=PUBLIC_KEY  ;;
+            SHORT_ID=*)    kp_val="$${kp_line#SHORT_ID=}"    ; kp_name=SHORT_ID    ;;
+            *) continue ;;
+          esac
+          # Values are base64/hex key material; reject anything outside that charset so a
+          # crafted value cannot survive into the rendered config or client URIs.
+          case "$kp_val" in
+            *[!A-Za-z0-9+/=_-]*|"")
+              echo "ERROR: $KEYPAIR_FILE contains a malformed $kp_name value; refusing to restore." >&2
+              exit 1 ;;
+          esac
+          printf -v "$kp_name" '%s' "$kp_val"
+        done < "$KEYPAIR_FILE"
         echo "Loaded existing Reality keypair."
         if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" || -z "$SHORT_ID" ]]; then
           echo "ERROR: $KEYPAIR_FILE is missing PRIVATE_KEY, PUBLIC_KEY, or SHORT_ID — restore from backup or delete the file to generate a fresh keypair." >&2
@@ -529,8 +677,25 @@ write_files:
         fi
       fi
 
+      # api4.my-ip.io is an unauthenticated third party, and this value is interpolated
+      # into the JSON config literal below and into every generated client URI. Validate
+      # it once here so no consumer receives an unvalidated response; a hostile or MITM'd
+      # reply otherwise injects directly into the rendered configuration.
+      vh_is_ipv4() {
+        [[ "$${1:-}" =~ ^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$ ]]
+      }
+
       SERVER_IP=$(curl -fsSL --max-time 5 https://api4.my-ip.io/ip.json \
-                  | jq -r '.ip' 2>/dev/null || hostname -I | awk '{print $1}')
+                  | jq -r '.ip' 2>/dev/null || true)
+      if ! vh_is_ipv4 "$SERVER_IP"; then
+        echo "xray-setup: public IP lookup returned no usable address; falling back to the local address" >&2
+        SERVER_IP=$(hostname -I | awk '{print $1}')
+      fi
+      if ! vh_is_ipv4 "$SERVER_IP"; then
+        echo "ERROR: could not determine a valid IPv4 address for this node." >&2
+        echo "       Refusing to render config.json and client URIs around an unvalidated value." >&2
+        exit 1
+      fi
 
       # The routing blocklist below denies RFC-1918, loopback and link-local, so the
       # intent is that proxied traffic must not reach this node's own surfaces. The
@@ -561,12 +726,17 @@ write_files:
           echo "Reusing UUID for: $USERNAME"
         else
           USER_UUID=$(/usr/local/bin/xray uuid)
-          echo "$USER_UUID" > "$UUID_FILE"
-          chmod 600 "$UUID_FILE"
+          # Create at 0600 rather than fixing the mode afterwards: a redirect at the
+          # ambient umask is world-readable until the chmod lands.
+          ( umask 077; echo "$USER_UUID" > "$UUID_FILE" )
+          chmod 600 "$UUID_FILE"   # belt and braces
           echo "Generated UUID for: $USERNAME"
         fi
 
         if [[ "$USERNAME" == "probe" ]]; then
+          # /etc/xray is 0755 and this file holds a working client credential, so a
+          # redirect at the ambient umask discloses it until the chmod below lands.
+          umask 077
           cat > "$CONFIG_DIR/probe-client.json" <<PROBEJSON
       {
         "log": { "loglevel": "warning" },
@@ -807,18 +977,20 @@ runcmd:
   # server does not proxy back to Iranian infrastructure — prevents proxy
   # fingerprinting by traffic analysis). Xray looks for these files alongside
   # the binary at /usr/local/bin/.
-  # Verified against each project's published .sha256sum (defeats transport MITM
-  # on the .dat; consistent with the checksum-pinning used for every other download).
+  # Verified against digests pinned in this repository. Fetching a .sha256sum from
+  # the same release path as the .dat proved transport integrity only — whatever
+  # could serve a modified .dat could serve a matching sum. A recorded pin is an
+  # independent reference point, which also means the release tag has to be pinned:
+  # "latest" and a fixed digest cannot both hold.
   - |
-    curl -fsSL "https://github.com/v2fly/geoip/releases/latest/download/geoip.dat" -o /tmp/geoip.dat
-    curl -fsSL "https://github.com/v2fly/geoip/releases/latest/download/geoip.dat.sha256sum" -o /tmp/geoip.dat.sha256sum
-    ( cd /tmp && sha256sum -c geoip.dat.sha256sum ) || { echo "FATAL: geoip.dat checksum mismatch — aborting"; exit 1; }
+    curl -fsSL "https://github.com/v2fly/geoip/releases/download/${geoip_version}/geoip.dat" -o /tmp/geoip.dat
+    echo "${geoip_sha256}  /tmp/geoip.dat" | sha256sum --check --strict - \
+      || { echo "FATAL: geoip.dat digest does not match the pin — aborting"; exit 1; }
     mv /tmp/geoip.dat /usr/local/bin/geoip.dat
-    curl -fsSL "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat" -o /tmp/dlc.dat
-    curl -fsSL "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat.sha256sum" -o /tmp/dlc.dat.sha256sum
-    ( cd /tmp && sha256sum -c dlc.dat.sha256sum ) || { echo "FATAL: geosite.dat checksum mismatch — aborting"; exit 1; }
+    curl -fsSL "https://github.com/v2fly/domain-list-community/releases/download/${geosite_version}/dlc.dat" -o /tmp/dlc.dat
+    echo "${geosite_sha256}  /tmp/dlc.dat" | sha256sum --check --strict - \
+      || { echo "FATAL: geosite.dat digest does not match the pin — aborting"; exit 1; }
     mv /tmp/dlc.dat /usr/local/bin/geosite.dat
-    rm -f /tmp/geoip.dat.sha256sum /tmp/dlc.dat.sha256sum
 
   # ── xray-exporter binary ──────────────────────────────────────────────────
   # Delegates to a write_files bash script (install-xray-exporter.sh) so that
@@ -962,6 +1134,9 @@ limit_req_zone  $binary_remote_addr zone=api_req:10m rate=30r/s;
       WorkloadAttestor "unix" { plugin_data {} }
     }
     AGENT_CONF
+    # The join token is written into this file (see spire-agent-join-token), so it
+    # must not be world-readable the way `cat >` under the default umask leaves it.
+    chmod 0600 /opt/spire/agent/agent.conf
   - |
     cat > /etc/systemd/system/spire-agent.service <<'AGENT_UNIT'
     [Unit]
@@ -970,8 +1145,7 @@ limit_req_zone  $binary_remote_addr zone=api_req:10m rate=30r/s;
     Wants=network-online.target
 
     [Service]
-    EnvironmentFile=-/opt/spire/agent/join.env
-    ExecStart=/usr/local/bin/spire-agent run -config /opt/spire/agent/agent.conf $JOIN_TOKEN_ARG
+    ExecStart=/usr/local/bin/spire-agent run -config /opt/spire/agent/agent.conf
     Restart=on-failure
     RestartSec=5
 

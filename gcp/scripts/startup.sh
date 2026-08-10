@@ -170,9 +170,13 @@ if [ "$VAULT_INITIALISED" = "false" ] && gcloud storage ls "gs://$BUCKET/vault.s
   # snapshot (which invalidates that token). KMS auto-unseal re-applies to the
   # restored data. This is the automatic recovery path (see docs/RUNBOOK.md).
   TMP_ROOT="$(vault operator init -format=json | jq -r '.root_token')"
-  gcloud storage cp "gs://$BUCKET/vault.snap" /tmp/vault.snap
-  VAULT_TOKEN="$TMP_ROOT" vault operator raft snapshot restore -force /tmp/vault.snap
-  rm -f /tmp/vault.snap
+  # Fixed /tmp names for restore material are predictable to a local account and, for a
+  # root-run script, invite a pre-created symlink redirecting the write. mktemp under a
+  # restrictive umask removes both.
+  VSNAP="$(umask 077; mktemp /tmp/vault.snap.XXXXXXXX)"
+  gcloud storage cp "gs://$BUCKET/vault.snap" "$VSNAP"
+  VAULT_TOKEN="$TMP_ROOT" vault operator raft snapshot restore -force "$VSNAP"
+  rm -f "$VSNAP"
 
   # Regenerate the AppRole secret-ids (they lived on the ephemeral disk) with the
   # scoped restore-agent gcp-auth role, which came back in the snapshot. Login is
@@ -198,19 +202,21 @@ if [ "$VAULT_INITIALISED" = "false" ] && gcloud storage ls "gs://$BUCKET/vault.s
   # remains restorable — without that fallback, a rebuild against an older backup would
   # silently come up with no SPIRE state.
   if gcloud storage ls "gs://$BUCKET/spire-data.tar.gz.enc" >/dev/null 2>&1; then
-    gcloud storage cp "gs://$BUCKET/spire-data.tar.gz.enc" /tmp/spire-data.tar.gz.enc
+    SPD="$(umask 077; mktemp -d /tmp/spire-restore.XXXXXXXX)"
+    gcloud storage cp "gs://$BUCKET/spire-data.tar.gz.enc" "$SPD/spire-data.tar.gz.enc"
     gcloud kms decrypt \
       --location "$REGION" --keyring "$KEYRING" --key "$CRYPTOKEY" \
-      --ciphertext-file /tmp/spire-data.tar.gz.enc \
-      --plaintext-file /tmp/spire-data.tar.gz
-    rm -f /tmp/spire-data.tar.gz.enc
-    tar -C /opt/spire/data/server -xzf /tmp/spire-data.tar.gz
-    rm -f /tmp/spire-data.tar.gz
+      --ciphertext-file "$SPD/spire-data.tar.gz.enc" \
+      --plaintext-file "$SPD/spire-data.tar.gz"
+    rm -f "$SPD/spire-data.tar.gz.enc"
+    tar -C /opt/spire/data/server -xzf "$SPD/spire-data.tar.gz"
+    rm -rf "$SPD"
   elif gcloud storage ls "gs://$BUCKET/spire-data.tar.gz" >/dev/null 2>&1; then
     echo "restore: legacy unencrypted spire-data.tar.gz found; restoring, next snapshot will be encrypted"
-    gcloud storage cp "gs://$BUCKET/spire-data.tar.gz" /tmp/spire-data.tar.gz
-    tar -C /opt/spire/data/server -xzf /tmp/spire-data.tar.gz
-    rm -f /tmp/spire-data.tar.gz
+    SPD="$(umask 077; mktemp -d /tmp/spire-restore.XXXXXXXX)"
+    gcloud storage cp "gs://$BUCKET/spire-data.tar.gz" "$SPD/spire-data.tar.gz"
+    tar -C /opt/spire/data/server -xzf "$SPD/spire-data.tar.gz"
+    rm -rf "$SPD"
   fi
 fi
 
@@ -334,9 +340,12 @@ BUCKET="$(md instance/attributes/snapshot-bucket)"
 SECRET_ID="$(cat /opt/vault-snapshot/secret-id)"
 VAULT_TOKEN="$(vault write -field=token auth/approle/login role_id="$ROLE_ID" secret_id="$SECRET_ID")"
 export VAULT_TOKEN
-vault operator raft snapshot save /tmp/vault.snap
-gcloud storage cp /tmp/vault.snap "gs://$BUCKET/vault.snap"
-rm -f /tmp/vault.snap
+# The snapshot carries the whole Vault datastore, so it gets the same treatment as
+# the restore path: a predictable root-owned /tmp name is a symlink-redirect target.
+VSNAP="$(umask 077; mktemp /tmp/vault.snap.XXXXXXXX)"
+vault operator raft snapshot save "$VSNAP"
+gcloud storage cp "$VSNAP" "gs://$BUCKET/vault.snap"
+rm -f "$VSNAP"
 
 # SPIRE server state: a transaction-consistent sqlite copy (never a raw cp of a
 # live DB) plus the disk KeyManager keys, so a rebuilt node restores the same

@@ -66,8 +66,13 @@ remote() { $SSH -- sudo "$@"; }
 upload() {
   local src="$1" dst="$2" perms="${3:-0644}"
   # deploy can't write system paths directly; stage in /tmp, then install as root.
+  # $$ is the local provisioner's PID and the basename is known, so the old
+  # /tmp/prov.$$.<name> path was guessable by any account on the target. A file or
+  # symlink pre-created there receives the uploaded content — which includes
+  # keypair.env and client UUIDs. Let the remote side pick an unpredictable name.
   local stage
-  stage="/tmp/prov.$$.$(basename "$dst")"
+  stage="$($SSH -- 'umask 077; mktemp /tmp/prov.XXXXXXXXXX')"
+  [ -n "$stage" ] || { log "ERROR: could not create a staging file on ${SERVER_IP}"; return 1; }
   $SCP "$src" "deploy@${SERVER_IP}:${stage}"
   remote install -m "$perms" "$stage" "$dst"
   $SSH -- rm -f "$stage"
@@ -78,7 +83,9 @@ download() {
   local src="$1" dst="$2"
   # Sources are root-owned/0600 → read via sudo cat. Stage to .partial so a
   # missing source never leaves a truncated file in backups/.
-  if remote cat "$src" > "$dst.partial" 2>/dev/null; then
+  # Create the partial file private: a redirect at the ambient umask leaves retrieved
+  # key material world-readable on the operator workstation until the chmod lands.
+  if ( umask 077; remote cat "$src" > "$dst.partial" 2>/dev/null ); then
     mv "$dst.partial" "$dst"
     chmod 600 "$dst"
   else
@@ -317,9 +324,11 @@ EOF
     [[ -n "$TOKEN" ]] || { log "ERROR: failed to mint SPIRE join token from GCP server."; exit 1; }
 
     upload "${CONTROL_DIR}/bundle.crt" "/opt/spire/agent/bootstrap.crt" "644"
-    # Compound command (umask + redirect to a root-owned path) must run wholly
-    # as root — pipe the content in and let a single sudo shell write it 0600.
-    printf 'JOIN_TOKEN_ARG=-joinToken %s\n' "$TOKEN" | $SSH -- "sudo sh -c 'umask 077; cat > /opt/spire/agent/join.env'"
+    # Piped over stdin into a root-only setter, which writes it into agent.conf.
+    # Never as an argument: an EnvironmentFile expanded into ExecStart put the token
+    # in /proc/<pid>/cmdline, and a token on this command line would be visible in
+    # the node's own process list just as plainly.
+    printf '%s\n' "$TOKEN" | $SSH -- "sudo /usr/local/sbin/spire-agent-join-token"
     $SSH -- "sudo sh -c 'systemctl daemon-reload && systemctl enable --now spire-agent'"
     sleep 3
     if remote "systemctl is-active --quiet spire-agent"; then

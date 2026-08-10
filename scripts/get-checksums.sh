@@ -86,17 +86,45 @@ CONDUIT_VERSION=$(get_var "conduit_version"            "release-cli-2.0.0")
 XRAY_VERSION=$(get_var "xray_version"                  "v26.4.25")
 ALLOY_VERSION=$(get_var "alloy_version"                "v1.8.3")
 XRAY_EXPORTER_VERSION=$(get_var "xray_exporter_version" "v0.2.0")
+GEOIP_VERSION=$(get_var "geoip_version"                "202608050239")
+GEOSITE_VERSION=$(get_var "geosite_version"            "20260807145230")
+AWSCLI_VERSION=$(get_var "awscli_version"              "2.36.19")
 
 echo "Fetching digests from the GitHub Releases API:"
 echo "  conduit          $CONDUIT_VERSION"
 echo "  xray-core        $XRAY_VERSION"
 echo "  grafana-alloy    $ALLOY_VERSION"
 echo "  xray-exporter    $XRAY_EXPORTER_VERSION"
+echo "  geoip.dat        $GEOIP_VERSION"
+echo "  geosite (dlc)    $GEOSITE_VERSION"
 echo ""
 
 CONDUIT_SHA256=$(api_digest "Psiphon-Inc/conduit"           "$CONDUIT_VERSION"       "conduit-linux-amd64")
 XRAY_ZIP_SHA256=$(api_digest "XTLS/Xray-core"               "$XRAY_VERSION"          "Xray-linux-64.zip")
 XRAY_EXPORTER_SHA256=$(api_digest "compassvpn/xray-exporter" "$XRAY_EXPORTER_VERSION" "xray-exporter-linux-amd64")
+GEOIP_SHA256=$(api_digest "v2fly/geoip"                    "$GEOIP_VERSION"         "geoip.dat")
+GEOSITE_SHA256=$(api_digest "v2fly/domain-list-community"  "$GEOSITE_VERSION"       "dlc.dat")
+
+# ── Artifacts with no release API: hash them here ─────────────────────────────
+# The k3s installer and the aws-cli zip are served straight off a vendor CDN, so
+# there is no published digest to read. Hashing them locally is exactly as strong
+# as the API digests above — see the trust note at the top of this file. What
+# matters either way is that the value gets RECORDED in terraform.tfvars.
+# sha256sum on Linux, shasum on macOS — this script runs on operator laptops.
+hash_url() {
+  if command -v sha256sum >/dev/null; then
+    curl -fsSL "$1" | sha256sum | awk '{print $1}'
+  else
+    curl -fsSL "$1" | shasum -a 256 | awk '{print $1}'
+  fi
+}
+
+echo "Hashing artifacts served without a release API:"
+echo "  k3s installer    https://get.k3s.io"
+echo "  aws-cli v2       $AWSCLI_VERSION (linux aarch64)"
+echo ""
+K3S_INSTALLER_SHA256=$(hash_url "https://get.k3s.io" || true)
+AWSCLI_ZIP_SHA256=$(hash_url "https://awscli.amazonaws.com/awscli-exe-linux-aarch64-$AWSCLI_VERSION.zip" || true)
 
 # Alloy assets frequently have no API digest → fall back to Grafana's SHA256SUMS.
 ALLOY_ZIP_SHA256=$(api_digest "grafana/alloy" "$ALLOY_VERSION" "alloy-linux-amd64.zip")
@@ -113,6 +141,10 @@ missing=""
 [[ -z "$XRAY_ZIP_SHA256" ]]      && missing+=" xray"
 [[ -z "$ALLOY_ZIP_SHA256" ]]     && missing+=" alloy"
 [[ -z "$XRAY_EXPORTER_SHA256" ]] && missing+=" xray-exporter"
+[[ -z "$GEOIP_SHA256" ]]         && missing+=" geoip"
+[[ -z "$GEOSITE_SHA256" ]]       && missing+=" geosite"
+[[ -z "$K3S_INSTALLER_SHA256" ]] && missing+=" k3s-installer"
+[[ -z "$AWSCLI_ZIP_SHA256" ]]    && missing+=" aws-cli"
 if [[ -n "$missing" ]]; then
   echo "ERROR: no digest found for:$missing" >&2
   echo "  Check the version/asset name. If the asset predates GitHub-computed" >&2
@@ -131,5 +163,12 @@ echo "conduit_sha256       = \"$CONDUIT_SHA256\""
 echo "xray_zip_sha256      = \"$XRAY_ZIP_SHA256\""
 echo "alloy_zip_sha256     = \"$ALLOY_ZIP_SHA256\""
 echo "xray_exporter_sha256 = \"$XRAY_EXPORTER_SHA256\""
+echo "geoip_sha256         = \"$GEOIP_SHA256\""
+echo "geosite_sha256       = \"$GEOSITE_SHA256\""
+echo ""
+echo " …and these to aws/terraform.tfvars:"
+echo ""
+echo "k3s_installer_sha256 = \"$K3S_INSTALLER_SHA256\""
+echo "awscli_zip_sha256    = \"$AWSCLI_ZIP_SHA256\""
 echo ""
 echo "══════════════════════════════════════════════════════════════"

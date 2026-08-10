@@ -122,3 +122,26 @@ variable "k3s_version" {
   type        = string
   default     = "v1.35.5+k3s1"
 }
+
+variable "k3s_installer_sha256" {
+  description = <<-EOT
+    SHA-256 of the https://get.k3s.io installer script, verified before it is
+    executed as root. Upstream edits this script independently of k3s releases,
+    so a boot that fails on a mismatch is the intended behaviour: re-run
+    scripts/get-checksums.sh, read the diff, then update the pin.
+  EOT
+  type        = string
+  default     = "ed01f89fd977bf20ac1516bbebf8370bf3ddbaa55dac8aba610956a4c78cc00b"
+}
+
+variable "awscli_version" {
+  description = "Pinned aws-cli v2 version. The unversioned zip URL moves, so no digest can describe it."
+  type        = string
+  default     = "2.36.19"
+}
+
+variable "awscli_zip_sha256" {
+  description = "SHA-256 of awscli-exe-linux-aarch64-<awscli_version>.zip, verified before it is unpacked and run as root."
+  type        = string
+  default     = "fb7a8cfd2a516a6b15560582fdc98c417fedffd39728d46fb6007b56b7c858d3"
+}
