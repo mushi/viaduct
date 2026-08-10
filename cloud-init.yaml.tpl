@@ -529,8 +529,25 @@ write_files:
         fi
       fi
 
+      # api4.my-ip.io is an unauthenticated third party, and this value is interpolated
+      # into the JSON config literal below and into every generated client URI. Validate
+      # it once here so no consumer receives an unvalidated response; a hostile or MITM'd
+      # reply otherwise injects directly into the rendered configuration.
+      vh_is_ipv4() {
+        [[ "${1:-}" =~ ^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$ ]]
+      }
+
       SERVER_IP=$(curl -fsSL --max-time 5 https://api4.my-ip.io/ip.json \
-                  | jq -r '.ip' 2>/dev/null || hostname -I | awk '{print $1}')
+                  | jq -r '.ip' 2>/dev/null || true)
+      if ! vh_is_ipv4 "$SERVER_IP"; then
+        echo "xray-setup: public IP lookup returned no usable address; falling back to the local address" >&2
+        SERVER_IP=$(hostname -I | awk '{print $1}')
+      fi
+      if ! vh_is_ipv4 "$SERVER_IP"; then
+        echo "ERROR: could not determine a valid IPv4 address for this node." >&2
+        echo "       Refusing to render config.json and client URIs around an unvalidated value." >&2
+        exit 1
+      fi
 
       # The routing blocklist below denies RFC-1918, loopback and link-local, so the
       # intent is that proxied traffic must not reach this node's own surfaces. The
