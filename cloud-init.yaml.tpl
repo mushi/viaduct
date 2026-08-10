@@ -40,7 +40,13 @@ users:
       - ${ops_ssh_public_key}
     # Genuine least-privilege for interactive debugging: inspect + service
     # lifecycle only, no file writes (systemctl fixed to status/restart/reload).
-    sudo: "ALL=(root) NOPASSWD: /usr/bin/systemctl status *, /usr/bin/systemctl restart *, /usr/bin/systemctl reload *, /usr/bin/journalctl *, /usr/bin/wg show, /usr/bin/wg show *"
+    # journalctl and wg are reached only through wrappers: a sudo wildcard matches
+    # the entire remaining argument string, so `journalctl *` also granted
+    # --vacuum-time (destroying the audit record) and `wg show *` also granted
+    # `wg show wg0 private-key`. Narrowing the patterns cannot exclude either;
+    # the wrappers take fixed arguments instead. The wildcard below is on the
+    # wrapper, which validates its own input — that is where the boundary lives.
+    sudo: "ALL=(root) NOPASSWD: /usr/bin/systemctl status *, /usr/bin/systemctl restart *, /usr/bin/systemctl reload *, /usr/local/bin/ops-journal, /usr/local/bin/ops-journal *, /usr/local/bin/ops-wg-status"
 
 write_files:
 
@@ -52,6 +58,60 @@ write_files:
       PermitRootLogin no
       PasswordAuthentication no
       AllowUsers deploy ops
+
+  # ── ops privilege wrappers ────────────────────────────────────────────────
+  # Both exist because sudo wildcards match the whole argument string. They are
+  # the only way ops reaches journalctl or wg, and they accept no pass-through
+  # arguments — only a keyword the script itself resolves to a fixed command.
+
+  - path: /usr/local/bin/ops-journal
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # Read-only journal access for the units this node actually runs. The unit
+      # name is matched against the allowlist and the *matched literal* is what
+      # journalctl receives, so nothing the caller typed is ever passed through.
+      set -euo pipefail
+
+      ALLOWED="conduit xray xray-probe-client xray-exporter xray-user-stats probe alloy hetzner-secrets nginx ssh wg-quick@wg0"
+
+      usage() {
+        echo "usage: sudo ops-journal <unit> [follow]" >&2
+        echo "units: $ALLOWED" >&2
+        exit 64
+      }
+
+      [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage
+
+      unit=""
+      for u in $ALLOWED; do
+        if [ "$u" = "$1" ]; then unit="$u"; break; fi
+      done
+      [ -n "$unit" ] || { echo "ops-journal: '$1' is not an inspectable unit" >&2; usage; }
+
+      case "$${2:-}" in
+        "")     exec /usr/bin/journalctl --no-pager -n 500 -u "$unit" ;;
+        follow) exec /usr/bin/journalctl --no-pager -n 100 -f -u "$unit" ;;
+        *)      usage ;;
+      esac
+
+  - path: /usr/local/bin/ops-wg-status
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # Mesh status without the key material. Bare `wg show` prints
+      # "private key: (hidden)"; `wg show <if> dump` prints it in full, which is
+      # why no interface or subcommand argument is accepted here.
+      set -euo pipefail
+
+      if [ "$#" -ne 0 ]; then
+        echo "usage: sudo ops-wg-status   (takes no arguments)" >&2
+        exit 64
+      fi
+
+      exec /usr/bin/wg show
 
   # ── Conduit systemd unit ──────────────────────────────────────────────────
   - path: /etc/systemd/system/conduit.service
