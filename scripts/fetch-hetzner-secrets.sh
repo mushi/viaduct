@@ -63,7 +63,11 @@ kv() { vapi -H "X-Vault-Token: $TOKEN" "$VAULT_ADDR/v1/kv/data/hetzner/$1" | jq 
 
 printf 'dns_cloudflare_api_token = %s\n' "$(kv cloudflare api_token)" > "$RUN/cloudflare.ini"
 
-chmod 0640 "$RUN/grafana.env" "$RUN/cloudflare.ini"
+# Alloy reads grafana.env, so that one keeps the group. certbot runs as root and is
+# the only consumer of the Cloudflare token — a token that can create DNS records
+# for the zone, so the alloy group has no business holding it.
+chmod 0640 "$RUN/grafana.env"
+chmod 0600 "$RUN/cloudflare.ini"
 
 # 5. Do not leave the SVID key or the fetched cert lying in tmpfs after use.
 unset TOKEN
