@@ -1,5 +1,7 @@
 # Viaduct: multi-cloud SPIFFE/SPIRE + Vault lab (Terraform)
 
+[![VulnHunter Regression Tests](https://github.com/mushi/viaduct/actions/workflows/python-app.yml/badge.svg)](https://github.com/mushi/viaduct/actions/workflows/python-app.yml)
+
 > This branch, `lab-multicloud-spire`, is a **three-cloud deployment** running a
 > bandwidth-donation data plane (VLESS+Reality and Psiphon Conduit) with cross-cloud
 > **workload identity** (federated SPIRE) and **centralized secrets** (Vault). It extends
