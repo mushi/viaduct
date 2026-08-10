@@ -101,6 +101,12 @@ vh_require vh_is_wg_key "hub public key (HUB_PUB)"   "$HUB_PUB" || exit 1
 vh_require vh_is_wg_key "mesh preshared key (WG_PSK)" "$WG_PSK"  || exit 1
 
 log "Staging the PSK in SSM Parameter Store (SecureString)..."
+# Reap any residue from a previous run before staging. The EXIT trap below already fires
+# on SIGTERM, SIGINT and SIGHUP — bash runs EXIT traps for all of those — so the only way
+# a parameter survives is SIGKILL, which cannot be trapped by definition. Clearing it here
+# bounds that residue to the interval between the kill and the next run, rather than
+# leaving the mesh preshared key resident indefinitely.
+aws ssm delete-parameter --region "$AWS_REGION" --name "$PSK_PARAM" >/dev/null 2>&1 || true
 aws ssm put-parameter --region "$AWS_REGION" --name "$PSK_PARAM" \
   --type SecureString --value "$WG_PSK" --overwrite >/dev/null
 trap 'aws ssm delete-parameter --region "$AWS_REGION" --name "$PSK_PARAM" >/dev/null 2>&1 || true' EXIT

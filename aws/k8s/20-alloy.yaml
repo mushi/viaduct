@@ -144,3 +144,38 @@ spec:
       - { name: host-proc, hostPath: { path: /proc } }
       - { name: host-sys, hostPath: { path: /sys } }
       - { name: host-txt, hostPath: { path: /var/lib/viaduct-textfile } }
+---
+# Default-deny ingress for the namespace. Alloy's HTTP server (:12345) serves its admin
+# UI and API; nothing in the cluster needs to reach it, and without a policy every pod
+# on the cluster network could. Alloy is outbound-only in normal operation: it scrapes
+# conduit-metrics:9090 and remote-writes to Grafana.
+#
+# The listener stays on 0.0.0.0 deliberately. The liveness probe is a tcpSocket probe and
+# the kubelet dials the POD IP, not loopback, so moving the listener to 127.0.0.1 would
+# fail the probe and restart-loop the pod.
+#
+# NOTE for operators: whether kubelet health probes are subject to NetworkPolicy is
+# CNI-dependent. If your CNI applies policy to node-originated traffic, the probe needs an
+# explicit allow for the node CIDR — add an ipBlock rule below. Verify the pod stays Ready
+# after applying this.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: default-deny-ingress, namespace: viaduct }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# The one ingress the namespace genuinely needs: Alloy scraping Conduit's metrics port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-alloy-scrape-conduit, namespace: viaduct }
+spec:
+  podSelector:
+    matchLabels: { app: conduit }
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels: { app: alloy }
+    ports:
+    - { protocol: TCP, port: 9090 }

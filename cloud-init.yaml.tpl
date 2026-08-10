@@ -532,6 +532,20 @@ write_files:
       SERVER_IP=$(curl -fsSL --max-time 5 https://api4.my-ip.io/ip.json \
                   | jq -r '.ip' 2>/dev/null || hostname -I | awk '{print $1}')
 
+      # The routing blocklist below denies RFC-1918, loopback and link-local, so the
+      # intent is that proxied traffic must not reach this node's own surfaces. The
+      # public address is the one route back in that the list missed: a client could
+      # dial it and reach :80/:8443 as though from outside. Add it as a /32.
+      #
+      # Emitted only when SERVER_IP looks like an IPv4 address — an empty or malformed
+      # value would render "/32" into the JSON and make Xray fail to parse its config.
+      SELF_IP_RULE=""
+      if printf '%s' "$SERVER_IP" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then
+        SELF_IP_RULE="            { \"type\": \"field\", \"ip\": [\"$SERVER_IP/32\"], \"outboundTag\": \"block\" },"
+      else
+        echo "xray-setup: WARNING - could not determine a valid public IP; the self-address routing block is omitted" >&2
+      fi
+
       # ── Per-user UUIDs and Xray clients JSON ─────────────────────────────
       CLIENTS_JSON_REALITY=""
       CLIENTS_JSON_XHTTP=""
@@ -727,6 +741,7 @@ write_files:
           "rules": [
             { "type": "field", "inboundTag": ["api"],        "outboundTag": "api" },
             { "type": "field", "inboundTag": ["metrics_in"], "outboundTag": "direct" },
+$SELF_IP_RULE
             { "type": "field", "ip": ["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","127.0.0.0/8","169.254.0.0/16","100.64.0.0/10","fc00::/7","::1/128"], "outboundTag": "block" },
             { "type": "field", "ip": ["geoip:ir"], "outboundTag": "block" },
             { "type": "field", "domain": ["geosite:category-ir"], "outboundTag": "block" }
@@ -844,6 +859,10 @@ runcmd:
   # run on the box via the certbot timer, reading the tmpfs credentials.
   - |
     cat > /etc/nginx/conf.d/site.conf <<'NGINX_CONF'
+# Shared state for the per-client limits applied to the unauthenticated /api location.
+# Declared here because conf.d is included in the http context.
+limit_conn_zone $binary_remote_addr zone=api_conn:10m;
+limit_req_zone  $binary_remote_addr zone=api_req:10m rate=30r/s;
     server {
         listen 80 default_server;
         listen [::]:80 default_server;
@@ -867,14 +886,32 @@ runcmd:
         ssl_certificate     /etc/letsencrypt/live/${vless_domain}/fullchain.pem;
         ssl_certificate_key /etc/letsencrypt/live/${vless_domain}/privkey.pem;
         ssl_protocols       TLSv1.2 TLSv1.3;
-        ssl_ciphers         HIGH:!aNULL:!MD5;
+        # HIGH still admits static-RSA key exchange (no forward secrecy) and CBC
+        # suites. Name the ECDHE AEAD suites explicitly instead; every modern client
+        # negotiates one of these, and TLS 1.3 suite selection is unaffected.
+        ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+        ssl_prefer_server_ciphers on;
         ssl_session_cache   shared:SSL:10m;
         ssl_session_timeout 10m;
 
         location /api {
+            # Unauthenticated and Internet-reachable, so bound what one client can hold.
+            limit_conn api_conn 16;
+            limit_req  zone=api_req burst=60 nodelay;
+
+            # Finite header/body timeouts: a slow-header or slow-body client should not
+            # be able to pin a worker indefinitely.
+            client_header_timeout 15s;
+            client_body_timeout   30s;
+            send_timeout          60s;
+
             proxy_pass         http://127.0.0.1:10000;
             proxy_http_version 1.1;
             proxy_set_header   Host $host;
+            # XHTTP is a long-poll transport: the upstream read timeout must stay
+            # generous or legitimate sessions are cut. The limits above bound
+            # concurrency and arrival rate instead, which is what makes exhaustion
+            # cost the client something.
             proxy_read_timeout 86400s;
             proxy_buffering    off;
         }
