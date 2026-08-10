@@ -520,8 +520,28 @@ write_files:
         chmod 600 "$KEYPAIR_FILE"
         echo "Generated new Reality keypair."
       else
-        # shellcheck source=/dev/null
-        source "$KEYPAIR_FILE"
+        # Parse, never source. `source` executes the backup as shell, so a tampered or
+        # merely corrupted keypair.env would run arbitrary commands as root on a freshly
+        # replaced node — at the exact moment the operator is trusting the restore path.
+        # Read only the three expected keys, and only when the line has the exact
+        # KEY=value shape; anything else is ignored rather than evaluated.
+        PRIVATE_KEY=""; PUBLIC_KEY=""; SHORT_ID=""
+        while IFS= read -r kp_line || [ -n "$kp_line" ]; do
+          case "$kp_line" in
+            PRIVATE_KEY=*) kp_val="${kp_line#PRIVATE_KEY=}" ; kp_name=PRIVATE_KEY ;;
+            PUBLIC_KEY=*)  kp_val="${kp_line#PUBLIC_KEY=}"  ; kp_name=PUBLIC_KEY  ;;
+            SHORT_ID=*)    kp_val="${kp_line#SHORT_ID=}"    ; kp_name=SHORT_ID    ;;
+            *) continue ;;
+          esac
+          # Values are base64/hex key material; reject anything outside that charset so a
+          # crafted value cannot survive into the rendered config or client URIs.
+          case "$kp_val" in
+            *[!A-Za-z0-9+/=_-]*|"")
+              echo "ERROR: $KEYPAIR_FILE contains a malformed $kp_name value; refusing to restore." >&2
+              exit 1 ;;
+          esac
+          printf -v "$kp_name" '%s' "$kp_val"
+        done < "$KEYPAIR_FILE"
         echo "Loaded existing Reality keypair."
         if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" || -z "$SHORT_ID" ]]; then
           echo "ERROR: $KEYPAIR_FILE is missing PRIVATE_KEY, PUBLIC_KEY, or SHORT_ID — restore from backup or delete the file to generate a fresh keypair." >&2
