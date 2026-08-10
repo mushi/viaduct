@@ -506,18 +506,27 @@ write_files:
 
       # ── Reality keypair ───────────────────────────────────────────────────
       if [[ ! -f "$KEYPAIR_FILE" ]]; then
-        /usr/local/bin/xray x25519 > /tmp/xray-x25519.txt 2>&1
-        PRIVATE_KEY=$(awk '/PrivateKey:/  {print $NF}' /tmp/xray-x25519.txt)
-        PUBLIC_KEY=$(awk  '/PublicKey/    {print $NF}' /tmp/xray-x25519.txt)
+        # Everything created in this branch is Reality key material. Set the umask once
+        # here so each file is created 0600, instead of being written world-readable and
+        # chmod-ed a moment later.
+        umask 077
+        # Predictable path + ambient umask meant the Reality private key was briefly
+        # readable by any local account (and the fixed name invites a pre-created
+        # symlink). mktemp under umask 077 removes both; the trap covers an early exit.
+        XKEY_TMP="$(umask 077; mktemp)"
+        trap 'rm -f "$XKEY_TMP"' RETURN EXIT
+        /usr/local/bin/xray x25519 > "$XKEY_TMP" 2>&1
+        PRIVATE_KEY=$(awk '/PrivateKey:/  {print $NF}' "$XKEY_TMP")
+        PUBLIC_KEY=$(awk  '/PublicKey/    {print $NF}' "$XKEY_TMP")
         SHORT_ID=$(openssl rand -hex 8)
-        rm -f /tmp/xray-x25519.txt
+        rm -f "$XKEY_TMP"
         if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" ]]; then
           echo "ERROR: failed to parse xray x25519 output — check format" >&2
           exit 1
         fi
         printf 'PRIVATE_KEY=%s\nPUBLIC_KEY=%s\nSHORT_ID=%s\n' \
           "$PRIVATE_KEY" "$PUBLIC_KEY" "$SHORT_ID" > "$KEYPAIR_FILE"
-        chmod 600 "$KEYPAIR_FILE"
+        chmod 600 "$KEYPAIR_FILE"   # belt and braces; the umask above governs creation
         echo "Generated new Reality keypair."
       else
         # Parse, never source. `source` executes the backup as shell, so a tampered or
@@ -598,12 +607,17 @@ write_files:
           echo "Reusing UUID for: $USERNAME"
         else
           USER_UUID=$(/usr/local/bin/xray uuid)
-          echo "$USER_UUID" > "$UUID_FILE"
-          chmod 600 "$UUID_FILE"
+          # Create at 0600 rather than fixing the mode afterwards: a redirect at the
+          # ambient umask is world-readable until the chmod lands.
+          ( umask 077; echo "$USER_UUID" > "$UUID_FILE" )
+          chmod 600 "$UUID_FILE"   # belt and braces
           echo "Generated UUID for: $USERNAME"
         fi
 
         if [[ "$USERNAME" == "probe" ]]; then
+          # /etc/xray is 0755 and this file holds a working client credential, so a
+          # redirect at the ambient umask discloses it until the chmod below lands.
+          umask 077
           cat > "$CONFIG_DIR/probe-client.json" <<PROBEJSON
       {
         "log": { "loglevel": "warning" },
