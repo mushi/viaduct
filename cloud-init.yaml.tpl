@@ -259,6 +259,15 @@ write_files:
   # The node's SPIRE SVID cert-auths to GCP Vault (over the mesh) and renders
   # kv/hetzner/{grafana,cloudflare} to /run/hetzner-secrets. base64 so the multi-line
   # script embeds cleanly in YAML.
+  # Shared mesh-trust helpers, sourced by fetch-hetzner-secrets.sh. Deployed
+  # alongside it: the script runs from /usr/local/bin, not from the repo, so the
+  # library has to land at the path the script sources.
+  - path: /usr/local/bin/lib/mesh-trust.sh
+    owner: root:root
+    permissions: "0644"
+    encoding: b64
+    content: ${base64encode(mesh_trust_lib)}
+
   - path: /usr/local/bin/fetch-hetzner-secrets.sh
     owner: root:root
     permissions: "0755"

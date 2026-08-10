@@ -193,7 +193,21 @@ if [ "$VAULT_INITIALISED" = "false" ] && gcloud storage ls "gs://$BUCKET/vault.s
 
   # SPIRE: restore the datastore + keys so the CA and registration/federation
   # state are unchanged (no re-attestation). Ownership is fixed by §6's chown.
-  if gcloud storage ls "gs://$BUCKET/spire-data.tar.gz" >/dev/null 2>&1; then
+  # Current backups are KMS-encrypted (the archive carries the viaduct.gcp CA private
+  # keys). The plaintext name is still accepted so a bucket written before this change
+  # remains restorable — without that fallback, a rebuild against an older backup would
+  # silently come up with no SPIRE state.
+  if gcloud storage ls "gs://$BUCKET/spire-data.tar.gz.enc" >/dev/null 2>&1; then
+    gcloud storage cp "gs://$BUCKET/spire-data.tar.gz.enc" /tmp/spire-data.tar.gz.enc
+    gcloud kms decrypt \
+      --location "$REGION" --keyring "$KEYRING" --key "$CRYPTOKEY" \
+      --ciphertext-file /tmp/spire-data.tar.gz.enc \
+      --plaintext-file /tmp/spire-data.tar.gz
+    rm -f /tmp/spire-data.tar.gz.enc
+    tar -C /opt/spire/data/server -xzf /tmp/spire-data.tar.gz
+    rm -f /tmp/spire-data.tar.gz
+  elif gcloud storage ls "gs://$BUCKET/spire-data.tar.gz" >/dev/null 2>&1; then
+    echo "restore: legacy unencrypted spire-data.tar.gz found; restoring, next snapshot will be encrypted"
     gcloud storage cp "gs://$BUCKET/spire-data.tar.gz" /tmp/spire-data.tar.gz
     tar -C /opt/spire/data/server -xzf /tmp/spire-data.tar.gz
     rm -f /tmp/spire-data.tar.gz
@@ -331,7 +345,18 @@ spdir="$(mktemp -d)"
 sqlite3 /opt/spire/data/server/datastore.sqlite3 ".backup '$spdir/datastore.sqlite3'"
 cp -a /opt/spire/data/server/keys.json "$spdir/keys.json"
 tar -C "$spdir" -czf "$spdir/spire-data.tar.gz" datastore.sqlite3 keys.json
-gcloud storage cp "$spdir/spire-data.tar.gz" "gs://$BUCKET/spire-data.tar.gz"
+# keys.json holds the viaduct.gcp CA private keys. Uploaded in the clear, anyone who
+# can read the snapshot bucket obtains the CA and can mint SVIDs for the whole trust
+# domain. Encrypt with the KMS key the instance already holds encrypt/decrypt on, so
+# bucket read alone is no longer sufficient.
+KMS_REGION="$(md instance/attributes/region)"
+KMS_KEYRING="$(md instance/attributes/kms-keyring)"
+KMS_CRYPTOKEY="$(md instance/attributes/kms-cryptokey)"
+gcloud kms encrypt \
+  --location "$KMS_REGION" --keyring "$KMS_KEYRING" --key "$KMS_CRYPTOKEY" \
+  --plaintext-file "$spdir/spire-data.tar.gz" \
+  --ciphertext-file "$spdir/spire-data.tar.gz.enc"
+gcloud storage cp "$spdir/spire-data.tar.gz.enc" "gs://$BUCKET/spire-data.tar.gz.enc"
 rm -rf "$spdir"
 SNAP
 chmod 0755 /usr/local/bin/vault-snapshot.sh
@@ -378,12 +403,31 @@ set -euo pipefail
 md() { curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/$1"; }
 export VAULT_ADDR="https://127.0.0.1:8200" VAULT_CACERT="/opt/vault/tls/vault.crt"
 TD="${1:-viaduct.aws}"
+
+# Whatever this resolves to becomes a Vault client CA for the aws-workload policy, and
+# TD itself lands in allowed_uri_sans. Constrain it to the two federated domains rather
+# than accepting any caller-supplied name.
+case "$TD" in
+  viaduct.aws|viaduct.gcp) ;;
+  *)
+    echo "ERROR: refusing to refresh a cert role for unexpected trust domain '${TD}'" >&2
+    echo "       Expected one of: viaduct.aws, viaduct.gcp" >&2
+    exit 1
+    ;;
+esac
+
 ROLE_ID="$(md instance/attributes/aws-certrole-approle-role-id)"
 SECRET_ID="$(cat /opt/vault-certrole/secret-id)"
 
 ca="$(mktemp)"; trap 'rm -f "$ca"' EXIT
 spire-server bundle list -id "spiffe://${TD}" -format pem > "$ca"
 [ -s "$ca" ] || { echo "ERROR: empty ${TD} bundle in the SPIRE store" >&2; exit 1; }
+# Non-empty is not enough: this is about to become an accepted client CA, so require
+# that it actually parses as a certificate.
+openssl x509 -in "$ca" -noout >/dev/null 2>&1 || {
+  echo "ERROR: ${TD} bundle is not a parseable PEM certificate; refusing to install it as a Vault client CA" >&2
+  exit 1
+}
 
 VAULT_TOKEN="$(vault write -field=token auth/approle/login role_id="$ROLE_ID" secret_id="$SECRET_ID")"
 export VAULT_TOKEN

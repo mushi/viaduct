@@ -201,7 +201,11 @@ plugins {
   WorkloadAttestor "unix" { plugin_data {} }
   WorkloadAttestor "k8s" {
     plugin_data {
-      skip_kubelet_verification = true
+      # Kubelet responses drive workload attestation — they decide which SVID a pod is
+      # issued — so the kubelet must be authenticated, not merely reachable. k3s signs
+      # kubelet serving certificates with its server CA, so verify against that.
+      skip_kubelet_verification = false
+      kubelet_ca_path           = "/var/lib/rancher/k3s/server/tls/server-ca.crt"
       token_path                = "/opt/spire/conf/agent/k8s-sa-token"
       node_name                 = "$NODE_NAME"
     }
@@ -278,6 +282,10 @@ cat > /opt/viaduct/crosscloud.env <<EOF
 GCP_IP=$GCP_IP
 GCP_TRUST_DOMAIN=$GCP_TRUST_DOMAIN
 EOF
+install -d -m0755 /opt/viaduct/lib
+install -m0644 /dev/stdin /opt/viaduct/lib/mesh-trust.sh <<'MESHTRUST'
+${mesh_trust_lib}
+MESHTRUST
 install -m0755 /dev/stdin /opt/viaduct/crosscloud-bootstrap.sh <<'CROSSCLOUD'
 ${crosscloud_script}
 CROSSCLOUD
