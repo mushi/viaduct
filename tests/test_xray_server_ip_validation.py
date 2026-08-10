@@ -20,6 +20,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 TPL = REPO_ROOT / "cloud-init.yaml.tpl"
 
 
+def render(body: str) -> str:
+    """Undo Terraform's template escaping, as templatefile() does at apply time.
+
+    The node runs the *rendered* script, so `$${x}` reaches bash as `${x}`. Extracting
+    the raw template instead would hand bash a literal `$$` (its own PID) and test a
+    script that is never deployed.
+    """
+    return body.replace("$${", "${").replace("%%{", "%{")
+
+
 def dedent(block: str) -> str:
     lines = block.splitlines()
     indent = min((len(l) - len(l.lstrip()) for l in lines if l.strip()), default=0)
@@ -28,7 +38,7 @@ def dedent(block: str) -> str:
 
 def resolve_fragment() -> str:
     """The shell from the SERVER_IP assignment up to (not including) the routing rule."""
-    body = TPL.read_text()
+    body = render(TPL.read_text())
     # Start at the validator definition when present (post-fix), otherwise at the
     # assignment itself (pre-fix), so the same extraction works either side.
     start = body.index("vh_is_ipv4()") if "vh_is_ipv4()" in body else body.index("SERVER_IP=$(")
@@ -82,7 +92,7 @@ class ServerIpValidationTest(unittest.TestCase):
 
     def test_every_consumer_is_downstream_of_the_guard(self):
         """The validation must dominate the config literal and the client URI."""
-        body = TPL.read_text()
+        body = render(TPL.read_text())
         lines = body.splitlines()
         guard = next(i for i, l in enumerate(lines)
                      if "SERVER_IP" in l and ("grep -qE" in l or "vh_is_ipv4" in l))

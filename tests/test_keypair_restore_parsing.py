@@ -22,6 +22,16 @@ TPL = REPO_ROOT / "cloud-init.yaml.tpl"
 GOOD = "PRIVATE_KEY=aPrivateKeyValue\nPUBLIC_KEY=aPublicKeyValue\nSHORT_ID=0123456789abcdef\n"
 
 
+def render(body: str) -> str:
+    """Undo Terraform's template escaping, as templatefile() does at apply time.
+
+    The node runs the *rendered* script, so `$${x}` reaches bash as `${x}`. Extracting
+    the raw template instead would hand bash a literal `$$` (its own PID) and test a
+    script that is never deployed.
+    """
+    return body.replace("$${", "${").replace("%%{", "%{")
+
+
 def dedent(block: str) -> str:
     lines = block.splitlines()
     indent = min((len(l) - len(l.lstrip()) for l in lines if l.strip()), default=0)
@@ -30,7 +40,7 @@ def dedent(block: str) -> str:
 
 def loader_fragment() -> str:
     """The else-branch that recovers an existing keypair."""
-    body = TPL.read_text()
+    body = render(TPL.read_text())
     start = body.index("Loaded existing Reality keypair")
     # Walk back to the start of the branch, forward to the end of its validation.
     head = body.rindex("else", 0, start)

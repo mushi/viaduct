@@ -537,9 +537,9 @@ write_files:
         PRIVATE_KEY=""; PUBLIC_KEY=""; SHORT_ID=""
         while IFS= read -r kp_line || [ -n "$kp_line" ]; do
           case "$kp_line" in
-            PRIVATE_KEY=*) kp_val="${kp_line#PRIVATE_KEY=}" ; kp_name=PRIVATE_KEY ;;
-            PUBLIC_KEY=*)  kp_val="${kp_line#PUBLIC_KEY=}"  ; kp_name=PUBLIC_KEY  ;;
-            SHORT_ID=*)    kp_val="${kp_line#SHORT_ID=}"    ; kp_name=SHORT_ID    ;;
+            PRIVATE_KEY=*) kp_val="$${kp_line#PRIVATE_KEY=}" ; kp_name=PRIVATE_KEY ;;
+            PUBLIC_KEY=*)  kp_val="$${kp_line#PUBLIC_KEY=}"  ; kp_name=PUBLIC_KEY  ;;
+            SHORT_ID=*)    kp_val="$${kp_line#SHORT_ID=}"    ; kp_name=SHORT_ID    ;;
             *) continue ;;
           esac
           # Values are base64/hex key material; reject anything outside that charset so a
@@ -563,7 +563,7 @@ write_files:
       # it once here so no consumer receives an unvalidated response; a hostile or MITM'd
       # reply otherwise injects directly into the rendered configuration.
       vh_is_ipv4() {
-        [[ "${1:-}" =~ ^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$ ]]
+        [[ "$${1:-}" =~ ^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$ ]]
       }
 
       SERVER_IP=$(curl -fsSL --max-time 5 https://api4.my-ip.io/ip.json \
