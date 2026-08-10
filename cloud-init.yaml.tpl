@@ -532,6 +532,20 @@ write_files:
       SERVER_IP=$(curl -fsSL --max-time 5 https://api4.my-ip.io/ip.json \
                   | jq -r '.ip' 2>/dev/null || hostname -I | awk '{print $1}')
 
+      # The routing blocklist below denies RFC-1918, loopback and link-local, so the
+      # intent is that proxied traffic must not reach this node's own surfaces. The
+      # public address is the one route back in that the list missed: a client could
+      # dial it and reach :80/:8443 as though from outside. Add it as a /32.
+      #
+      # Emitted only when SERVER_IP looks like an IPv4 address — an empty or malformed
+      # value would render "/32" into the JSON and make Xray fail to parse its config.
+      SELF_IP_RULE=""
+      if printf '%s' "$SERVER_IP" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then
+        SELF_IP_RULE="            { \"type\": \"field\", \"ip\": [\"$SERVER_IP/32\"], \"outboundTag\": \"block\" },"
+      else
+        echo "xray-setup: WARNING - could not determine a valid public IP; the self-address routing block is omitted" >&2
+      fi
+
       # ── Per-user UUIDs and Xray clients JSON ─────────────────────────────
       CLIENTS_JSON_REALITY=""
       CLIENTS_JSON_XHTTP=""
@@ -727,6 +741,7 @@ write_files:
           "rules": [
             { "type": "field", "inboundTag": ["api"],        "outboundTag": "api" },
             { "type": "field", "inboundTag": ["metrics_in"], "outboundTag": "direct" },
+$SELF_IP_RULE
             { "type": "field", "ip": ["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","127.0.0.0/8","169.254.0.0/16","100.64.0.0/10","fc00::/7","::1/128"], "outboundTag": "block" },
             { "type": "field", "ip": ["geoip:ir"], "outboundTag": "block" },
             { "type": "field", "domain": ["geosite:category-ir"], "outboundTag": "block" }
