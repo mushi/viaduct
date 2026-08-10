@@ -128,6 +128,10 @@ data "cloudinit_config" "conduit" {
       conduit_sha256        = var.conduit_sha256
       xray_version          = var.xray_version
       xray_zip_sha256       = var.xray_zip_sha256
+      geoip_version         = var.geoip_version
+      geoip_sha256          = var.geoip_sha256
+      geosite_version       = var.geosite_version
+      geosite_sha256        = var.geosite_sha256
       vless_sni             = var.vless_sni
       vless_domain          = var.vless_domain
       fetch_secrets_script  = file("${path.module}/scripts/fetch-hetzner-secrets.sh")

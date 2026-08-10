@@ -212,3 +212,31 @@ variable "wg_hub_ip" {
   type        = string
   default     = "10.99.0.1"
 }
+
+# ── Xray geo data ─────────────────────────────────────────────────────────────
+# Pinned by release tag AND digest. Both are needed: the previous code tracked
+# "latest", which no fixed digest can describe.
+
+variable "geoip_version" {
+  description = "Pinned v2fly/geoip release tag providing geoip.dat."
+  type        = string
+  default     = "202608050239"
+}
+
+variable "geoip_sha256" {
+  description = "SHA-256 of geoip.dat from the pinned v2fly/geoip release."
+  type        = string
+  default     = "c67bd077eb102cec74fab759b73d17f99275f56af10a87c14d9fd983508f5ce1"
+}
+
+variable "geosite_version" {
+  description = "Pinned v2fly/domain-list-community release tag providing dlc.dat (installed as geosite.dat)."
+  type        = string
+  default     = "20260807145230"
+}
+
+variable "geosite_sha256" {
+  description = "SHA-256 of dlc.dat from the pinned v2fly/domain-list-community release."
+  type        = string
+  default     = "c383bc2487049f2bd49a54806c178098b990b08d4b1716140f9f9c86e7f15c71"
+}

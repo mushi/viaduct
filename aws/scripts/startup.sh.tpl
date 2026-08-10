@@ -111,8 +111,17 @@ log "waiting for SPIRE server..."
 for i in $(seq 1 30); do spire-server bundle show >/dev/null 2>&1 && break; sleep 2; done
 
 # ─── 4. k3s (pinned; trimmed for the small box) ───────────────────────────────
-curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" \
-  INSTALL_K3S_EXEC="server --disable traefik --disable servicelb" sh -
+# `curl … | sh` executes whatever the endpoint returns, as root, and leaves no
+# record of what ran. Download first, check it against the pin recorded in this
+# repo, and only then execute: a compromised or MITM'd endpoint fails the boot
+# instead of owning the node.
+K3S_INSTALLER="$(umask 077; mktemp /tmp/k3s-install.XXXXXXXX.sh)"
+curl -sfL https://get.k3s.io -o "$K3S_INSTALLER"
+echo "${k3s_installer_sha256}  $K3S_INSTALLER" | sha256sum --check --strict - \
+  || { log "FATAL: k3s installer digest mismatch — refusing to execute"; exit 1; }
+INSTALL_K3S_VERSION="$K3S_VERSION" \
+  INSTALL_K3S_EXEC="server --disable traefik --disable servicelb" sh "$K3S_INSTALLER"
+rm -f "$K3S_INSTALLER"
 log "waiting for k3s node Ready..."
 for i in $(seq 1 60); do $KUBECTL get nodes 2>/dev/null | grep -q ' Ready ' && break; sleep 5; done
 
@@ -248,8 +257,16 @@ if [ -n "$AGENT_ID" ]; then
 fi
 
 # ─── 9. aws-cli v2 + egress guardrail (auto-stop near free-tier cap) ──────────
-curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscliv2.zip
-( cd /tmp && unzip -q -o awscliv2.zip && ./aws/install --update ); rm -rf /tmp/awscliv2.zip /tmp/aws
+# The zip is unpacked and its installer executed as root, so anything able to
+# answer for awscli.amazonaws.com obtains root here. The unversioned URL is a
+# moving target no digest can describe, so pin the version too.
+AWSCLI_DIR="$(umask 077; mktemp -d /tmp/awscli.XXXXXXXX)"
+curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64-${awscli_version}.zip" \
+  -o "$AWSCLI_DIR/awscliv2.zip"
+echo "${awscli_zip_sha256}  $AWSCLI_DIR/awscliv2.zip" | sha256sum --check --strict - \
+  || { log "FATAL: aws-cli zip digest mismatch — refusing to install"; exit 1; }
+( cd "$AWSCLI_DIR" && unzip -q -o awscliv2.zip && ./aws/install --update )
+rm -rf "$AWSCLI_DIR"
 install -m0755 /dev/stdin /usr/local/sbin/egress-guardrail.sh <<'GUARDRAIL'
 ${guardrail_script}
 GUARDRAIL

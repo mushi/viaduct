@@ -918,18 +918,20 @@ runcmd:
   # server does not proxy back to Iranian infrastructure — prevents proxy
   # fingerprinting by traffic analysis). Xray looks for these files alongside
   # the binary at /usr/local/bin/.
-  # Verified against each project's published .sha256sum (defeats transport MITM
-  # on the .dat; consistent with the checksum-pinning used for every other download).
+  # Verified against digests pinned in this repository. Fetching a .sha256sum from
+  # the same release path as the .dat proved transport integrity only — whatever
+  # could serve a modified .dat could serve a matching sum. A recorded pin is an
+  # independent reference point, which also means the release tag has to be pinned:
+  # "latest" and a fixed digest cannot both hold.
   - |
-    curl -fsSL "https://github.com/v2fly/geoip/releases/latest/download/geoip.dat" -o /tmp/geoip.dat
-    curl -fsSL "https://github.com/v2fly/geoip/releases/latest/download/geoip.dat.sha256sum" -o /tmp/geoip.dat.sha256sum
-    ( cd /tmp && sha256sum -c geoip.dat.sha256sum ) || { echo "FATAL: geoip.dat checksum mismatch — aborting"; exit 1; }
+    curl -fsSL "https://github.com/v2fly/geoip/releases/download/${geoip_version}/geoip.dat" -o /tmp/geoip.dat
+    echo "${geoip_sha256}  /tmp/geoip.dat" | sha256sum --check --strict - \
+      || { echo "FATAL: geoip.dat digest does not match the pin — aborting"; exit 1; }
     mv /tmp/geoip.dat /usr/local/bin/geoip.dat
-    curl -fsSL "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat" -o /tmp/dlc.dat
-    curl -fsSL "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat.sha256sum" -o /tmp/dlc.dat.sha256sum
-    ( cd /tmp && sha256sum -c dlc.dat.sha256sum ) || { echo "FATAL: geosite.dat checksum mismatch — aborting"; exit 1; }
+    curl -fsSL "https://github.com/v2fly/domain-list-community/releases/download/${geosite_version}/dlc.dat" -o /tmp/dlc.dat
+    echo "${geosite_sha256}  /tmp/dlc.dat" | sha256sum --check --strict - \
+      || { echo "FATAL: geosite.dat digest does not match the pin — aborting"; exit 1; }
     mv /tmp/dlc.dat /usr/local/bin/geosite.dat
-    rm -f /tmp/geoip.dat.sha256sum /tmp/dlc.dat.sha256sum
 
   # ── xray-exporter binary ──────────────────────────────────────────────────
   # Delegates to a write_files bash script (install-xray-exporter.sh) so that
