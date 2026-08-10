@@ -76,6 +76,27 @@ spec:
           U=$(vault kv get -field=prometheus_user kv/aws/grafana)
           K=$(vault kv get -field=api_key kv/aws/grafana)
           URL=$(vault kv get -field=prometheus_url kv/aws/grafana)
+          # These three go unescaped into the River heredoc below, which Alloy then
+          # parses as configuration — and River configuration can declare components,
+          # so a value carrying a quote or a newline does not merely break the render,
+          # it adds directives (an extra remote_write shipping this node's metrics
+          # elsewhere, for one). Validate before interpolating, and refuse to render
+          # rather than render something unintended.
+          vh_reject() {
+            echo "ERROR: $1 from kv/aws/grafana is empty or carries characters that" >&2
+            echo "       would close the River string; refusing to render config.alloy" >&2
+            exit 1
+          }
+          vh_check() {  # name value extended-regex
+            [ -n "$2" ] || vh_reject "$1"
+            # grep matches line by line, so a value with an embedded newline could pass
+            # on each line while still injecting a directive. Reject multi-line first.
+            [ "$(printf '%s' "$2" | wc -l)" -eq 0 ] || vh_reject "$1"
+            printf '%s' "$2" | grep -qE "$3" || vh_reject "$1"
+          }
+          vh_check prometheus_url  "$URL" '^https://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$'
+          vh_check prometheus_user "$U"   '^[A-Za-z0-9._@-]+$'
+          vh_check api_key         "$K"   '^[A-Za-z0-9._=+/-]+$'
           cat > /rendered/config.alloy <<CFG
           prometheus.exporter.unix "node" {
             procfs_path    = "/host/proc"

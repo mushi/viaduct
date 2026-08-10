@@ -324,9 +324,11 @@ EOF
     [[ -n "$TOKEN" ]] || { log "ERROR: failed to mint SPIRE join token from GCP server."; exit 1; }
 
     upload "${CONTROL_DIR}/bundle.crt" "/opt/spire/agent/bootstrap.crt" "644"
-    # Compound command (umask + redirect to a root-owned path) must run wholly
-    # as root — pipe the content in and let a single sudo shell write it 0600.
-    printf 'JOIN_TOKEN_ARG=-joinToken %s\n' "$TOKEN" | $SSH -- "sudo sh -c 'umask 077; cat > /opt/spire/agent/join.env'"
+    # Piped over stdin into a root-only setter, which writes it into agent.conf.
+    # Never as an argument: an EnvironmentFile expanded into ExecStart put the token
+    # in /proc/<pid>/cmdline, and a token on this command line would be visible in
+    # the node's own process list just as plainly.
+    printf '%s\n' "$TOKEN" | $SSH -- "sudo /usr/local/sbin/spire-agent-join-token"
     $SSH -- "sudo sh -c 'systemctl daemon-reload && systemctl enable --now spire-agent'"
     sleep 3
     if remote "systemctl is-active --quiet spire-agent"; then

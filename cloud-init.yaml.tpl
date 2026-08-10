@@ -59,6 +59,65 @@ write_files:
       PasswordAuthentication no
       AllowUsers deploy ops
 
+  # ── SPIRE join token setter ───────────────────────────────────────────────
+  # The provisioner mints a one-time join token on the GCP SPIRE server and has to
+  # get it onto this node. It used to arrive as JOIN_TOKEN_ARG=-joinToken <token>
+  # in an EnvironmentFile, which systemd expanded into the agent's ExecStart — so
+  # the token sat in /proc/<pid>/cmdline, world-readable, for as long as the agent
+  # ran. Any local process could read it and attest as this node. It now goes into
+  # the root-only agent.conf, piped in over stdin so it never appears in argv here
+  # either.
+
+  - path: /usr/local/sbin/spire-agent-join-token
+    owner: root:root
+    permissions: "0700"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      CONF=/opt/spire/agent/agent.conf
+
+      read -r token
+      # SPIRE tokens are UUIDs. Validate before interpolating into HCL, and reject
+      # rather than write something that would change the agent's configuration.
+      case "$token" in
+        "" | *[!A-Za-z0-9-]* )
+          echo "spire-agent-join-token: token outside [A-Za-z0-9-]; refusing" >&2
+          exit 64 ;;
+      esac
+
+      umask 077
+      tmp="$(mktemp "$CONF.XXXXXXXX")"
+      # Drop any token from a previous provision and place the current one inside the
+      # agent block — the first block in the file, so the first bare closing brace is
+      # its own. Done in bash rather than sed: `0,/re/` addressing and \n in the
+      # replacement are GNU extensions, and this has to behave identically wherever
+      # it is exercised.
+      set -f
+      inserted=0
+      while IFS= read -r line || [ -n "$line" ]; do
+        set -- $line
+        [ "$${1:-}" = "join_token" ] && continue
+        if [ "$inserted" -eq 0 ] && [ "$line" = "}" ]; then
+          printf '  join_token        = "%s"\n' "$token" >> "$tmp"
+          inserted=1
+        fi
+        printf '%s\n' "$line" >> "$tmp"
+      done < "$CONF"
+      set +f
+
+      if [ "$inserted" -ne 1 ]; then
+        echo "spire-agent-join-token: no agent block found in $CONF; refusing" >&2
+        rm -f "$tmp"
+        exit 1
+      fi
+
+      chmod 0600 "$tmp"
+      mv "$tmp" "$CONF"
+
+      # Residue from the argv-based scheme, if this node predates the change.
+      rm -f /opt/spire/agent/join.env
+
   # ── ops privilege wrappers ────────────────────────────────────────────────
   # Both exist because sudo wildcards match the whole argument string. They are
   # the only way ops reaches journalctl or wg, and they accept no pass-through
@@ -1075,6 +1134,9 @@ limit_req_zone  $binary_remote_addr zone=api_req:10m rate=30r/s;
       WorkloadAttestor "unix" { plugin_data {} }
     }
     AGENT_CONF
+    # The join token is written into this file (see spire-agent-join-token), so it
+    # must not be world-readable the way `cat >` under the default umask leaves it.
+    chmod 0600 /opt/spire/agent/agent.conf
   - |
     cat > /etc/systemd/system/spire-agent.service <<'AGENT_UNIT'
     [Unit]
@@ -1083,8 +1145,7 @@ limit_req_zone  $binary_remote_addr zone=api_req:10m rate=30r/s;
     Wants=network-online.target
 
     [Service]
-    EnvironmentFile=-/opt/spire/agent/join.env
-    ExecStart=/usr/local/bin/spire-agent run -config /opt/spire/agent/agent.conf $JOIN_TOKEN_ARG
+    ExecStart=/usr/local/bin/spire-agent run -config /opt/spire/agent/agent.conf
     Restart=on-failure
     RestartSec=5
 
