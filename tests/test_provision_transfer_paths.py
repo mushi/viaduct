@@ -106,5 +106,59 @@ class DownloadModeTest(unittest.TestCase):
                              f"the subshell umask idiom did not yield 0600: {p.stdout!r}")
 
 
+
+class DownloadPartialModeBehaviourTest(unittest.TestCase):
+    """Execute the real download() and stat what it actually creates.
+
+    The textual assertions above are satisfied by any download() containing
+    "umask 077" ahead of the redirect — including forms where the umask does not
+    scope the redirect, e.g. `( umask 077 ); remote cat "$src" > "$dst.partial"`,
+    which leaves the partial world-readable. Only observing the mode rules that out.
+    """
+
+    def run_download(self, stub_mv: bool):
+        tmp = tempfile.mkdtemp()
+        # A deliberately permissive ambient umask: the bug being guarded against is
+        # exactly "whatever the operator's shell happens to be set to".
+        stubs = 'remote() { printf "%s" "restored-key-material"; }\n'
+        if stub_mv:
+            # Keep the .partial in place so its mode can be observed.
+            stubs += f'mv() {{ echo "mv $*" >> "{tmp}/mv.log"; }}\n'
+        script = (f'umask 022\n{stubs}{func_body("download")}\n'
+                  f'download /opt/spire/agent/keypair.env "{tmp}/out"\n')
+        p = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                           timeout=30, stdin=subprocess.DEVNULL)
+        p.tmp = Path(tmp)
+        return p
+
+    @staticmethod
+    def mode(path: Path):
+        return stat.S_IMODE(path.stat().st_mode) if path.exists() else None
+
+    def test_the_partial_is_created_private(self):
+        p = self.run_download(stub_mv=True)
+        partial = p.tmp / "out.partial"
+        self.assertTrue(
+            partial.exists(),
+            f"nothing was staged, so the mode assertion below is vacuous "
+            f"(rc={p.returncode}, stderr={p.stderr[-300:]})")
+        self.assertEqual(partial.read_text(), "restored-key-material",
+                         "the staged file does not hold what was fetched")
+        self.assertEqual(
+            self.mode(partial) & 0o077, 0,
+            f"the staged partial is {oct(self.mode(partial))} under a 022 umask, so "
+            f"retrieved key material is readable by other local accounts on the "
+            f"operator workstation for the window before the chmod lands")
+
+    def test_the_delivered_file_is_private(self):
+        p = self.run_download(stub_mv=False)
+        out = p.tmp / "out"
+        self.assertTrue(out.exists(),
+                        f"download() delivered nothing (rc={p.returncode}, {p.stderr[-300:]})")
+        self.assertEqual(self.mode(out), 0o600,
+                         f"the delivered file is {oct(self.mode(out))}, not 0600")
+        self.assertFalse((p.tmp / "out.partial").exists(),
+                         "the staging file was left behind")
+
 if __name__ == "__main__":
     unittest.main()

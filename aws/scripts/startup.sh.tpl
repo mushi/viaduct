@@ -115,7 +115,9 @@ for i in $(seq 1 30); do spire-server bundle show >/dev/null 2>&1 && break; slee
 # record of what ran. Download first, check it against the pin recorded in this
 # repo, and only then execute: a compromised or MITM'd endpoint fails the boot
 # instead of owning the node.
-K3S_INSTALLER="$(umask 077; mktemp /tmp/k3s-install.XXXXXXXX.sh)"
+# No suffix after the Xs: only GNU mktemp accepts one, and the installer is
+# invoked as `sh <file>` so the name does not need to end in .sh.
+K3S_INSTALLER="$(umask 077; mktemp /tmp/k3s-install.XXXXXXXX)"
 curl -sfL https://get.k3s.io -o "$K3S_INSTALLER"
 echo "${k3s_installer_sha256}  $K3S_INSTALLER" | sha256sum --check --strict - \
   || { log "FATAL: k3s installer digest mismatch — refusing to execute"; exit 1; }

@@ -94,10 +94,16 @@ class AlloyConfigRenderTest(unittest.TestCase):
         out.mkdir()
 
         fields = {"prometheus_url": url, "prometheus_user": user, "api_key": key}
+        # Each value is written to a file and cat-ed back, so the stub delivers the
+        # exact bytes. Interpolating a Python repr into the stub would turn an
+        # embedded newline into a literal backslash-n and quietly stop exercising
+        # the multi-line guard.
+        for name, value in fields.items():
+            (Path(tmp) / f"field_{name}").write_text(value)
         # `vault kv get -field=<name> kv/aws/grafana` — match the flag as a whole
         # word so prometheus_url and prometheus_user cannot alias each other.
         cases = "\n".join(
-            f'  *"-field={name} "*) printf "%s" {value!r} ;;' for name, value in fields.items())
+            f'  *"-field={name} "*) cat "{tmp}/field_{name}" ;;' for name in fields)
         (binp / "vault").write_text(
             "#!/usr/bin/env bash\ncase \"$*\" in\n" + cases + "\nesac\nexit 0\n")
         (binp / "vault").chmod(0o755)
@@ -231,10 +237,27 @@ class JoinTokenSetterTest(unittest.TestCase):
 
 
 class JoinTokenNotInArgvTest(unittest.TestCase):
-    def test_the_unit_does_not_expand_a_token_into_execstart(self):
+    @staticmethod
+    def unit_body() -> str:
+        """The systemd unit's heredoc body.
+
+        Slicing at the first "AGENT_UNIT" lands on the heredoc *opener*, which sits
+        on the `cat >` line — the body would then be empty and every assertion over
+        it vacuous. Step past that line first, then cut at the terminator.
+        """
         body = render(CLOUD_INIT.read_text())
-        unit = body[body.index("cat > /etc/systemd/system/spire-agent.service"):]
-        unit = unit[: unit.index("AGENT_UNIT")]
+        opener = body.index("cat > /etc/systemd/system/spire-agent.service")
+        start = body.index("\n", opener) + 1
+        return body[start: body.index("AGENT_UNIT", start)]
+
+    def test_the_extracted_unit_is_the_real_one(self):
+        """Anchor: the two assertions below are only meaningful over a real body."""
+        unit = self.unit_body()
+        self.assertIn("[Service]", unit, f"the extracted unit body is not a unit:\n{unit!r}")
+        self.assertIn("ExecStart=", unit, f"the extracted unit body has no ExecStart:\n{unit!r}")
+
+    def test_the_unit_does_not_expand_a_token_into_execstart(self):
+        unit = self.unit_body()
         self.assertNotIn("JOIN_TOKEN_ARG", unit,
                          f"the token is still expanded into the command line:\n{unit}")
         self.assertNotIn("join.env", unit,
