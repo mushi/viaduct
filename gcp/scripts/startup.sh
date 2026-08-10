@@ -460,25 +460,87 @@ install -d -m 0700 /run/wireguard
 # demand by a spoke's provisioner right after it registers (so a spoke joins
 # without waiting for a hub reboot). Idempotent: `wg set` upserts each peer. The
 # PSK is passed via a process-substitution fd, never written to disk.
+# Validators for anything arriving from the peer registry. Emitted once here and
+# sourced by both peer scripts below.
+#
+# The repo-level scripts/lib/provision-guards.sh cannot be reused directly: gcp/main.tf
+# loads this file with file(), not templatefile(), and the script is full of shell
+# ${VAR} references that templatefile would try to interpolate. Keep these definitions
+# in step with the canonical library.
+install -d -m0755 /usr/local/bin/lib
+cat > /usr/local/bin/lib/wg-validate.sh <<'WGVAL'
+#!/usr/bin/env bash
+# Sourced by wg-sync-peers.sh and wg-register-peer.sh. See scripts/lib/provision-guards.sh.
+
+# base64 of exactly 32 bytes: 43 chars then '='. The final pre-padding character
+# encodes two significant bits, hence the restricted set.
+vh_is_wg_key()  { [[ "${1:-}" =~ ^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw4]=$ ]]; }
+
+# Any host address in the mesh /24, excluding network and broadcast.
+vh_is_mesh_ip() { [[ "${1:-}" =~ ^10\.99\.0\.([1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$ ]]; }
+
+# A PEER address: as above, but never the hub's own. A peer whose allowed-ips covers
+# 10.99.0.1 would receive traffic addressed to the hub.
+vh_is_peer_mesh_ip() { vh_is_mesh_ip "${1:-}" && [ "${1:-}" != "10.99.0.1" ]; }
+WGVAL
+chmod 0644 /usr/local/bin/lib/wg-validate.sh
+
 cat > /usr/local/bin/wg-sync-peers.sh <<'SYNC'
 #!/usr/bin/env bash
 set -euo pipefail
+. /usr/local/bin/lib/wg-validate.sh
 export VAULT_ADDR="https://127.0.0.1:8200" VAULT_CACERT="/opt/vault/tls/vault.crt"
 VAULT_TOKEN="$(vault login -method=gcp -token-only role=wireguard-hub type=gce)"; export VAULT_TOKEN
 names="$(vault kv list -format=json kv/wireguard/peers 2>/dev/null | jq -r '.[]?' || true)"
+
+claimed_ips=""      # mesh IPs already applied in this pass (VULN-011)
+applied_keys=""     # peer keys the registry authorises (VULN-015)
+
 for name in $names; do
   json="$(vault kv get -format=json "kv/wireguard/peers/$name" 2>/dev/null || true)"
   [ -n "$json" ] || continue
   pub="$(printf '%s' "$json" | jq -r '.data.data.public_key // empty')"
   ip="$(printf '%s' "$json"  | jq -r '.data.data.mesh_ip // empty')"
   psk="$(printf '%s' "$json" | jq -r '.data.data.psk // empty')"
-  [ -n "$pub" ] && [ -n "$ip" ] || continue
-  if [ -n "$psk" ]; then
-    wg set wg0 peer "$pub" preshared-key <(printf '%s' "$psk") allowed-ips "$ip/32"
-  else
-    wg set wg0 peer "$pub" allowed-ips "$ip/32"
+
+  # The registry is writable by anything holding the wireguard-hub policy, so treat
+  # every field as untrusted before it reaches `wg set`.
+  vh_is_wg_key "$pub" || { echo "wg-sync: peer '$name' has a malformed public_key; skipping" >&2; continue; }
+  vh_is_peer_mesh_ip "$ip" || { echo "wg-sync: peer '$name' has an invalid or reserved mesh_ip '$ip'; skipping" >&2; continue; }
+
+  # allowed-ips is the mesh's authorisation boundary: two peers sharing an address
+  # means the later `wg set` silently displaces the earlier peer's routing.
+  case " $claimed_ips " in
+    *" $ip "*) echo "wg-sync: mesh_ip '$ip' already claimed in this pass; skipping peer '$name'" >&2; continue ;;
+  esac
+
+  # A missing psk must not silently drop the mesh's second factor. Fail this peer
+  # closed rather than configuring it without a preshared key.
+  if [ -z "$psk" ]; then
+    echo "wg-sync: peer '$name' has no psk; refusing to configure it without a preshared key" >&2
+    continue
   fi
+
+  wg set wg0 peer "$pub" preshared-key <(printf '%s' "$psk") allowed-ips "$ip/32"
+  claimed_ips="$claimed_ips $ip"
+  applied_keys="$applied_keys $pub"
 done
+
+# Converge: drop peers configured on the interface that the registry no longer lists.
+# Without this, deleting a registry entry does not revoke anything until a reboot.
+#
+# Safe to remove unconditionally here: the hub's own /etc/wireguard/wg0.conf declares
+# [Interface] only and no [Peer] sections, so every peer present on wg0 arrived through
+# this reconcile. If a static peer is ever added to wg0.conf, it must be excluded here
+# or this loop will delete it on the next run.
+for existing in $(wg show wg0 peers 2>/dev/null || true); do
+  case " $applied_keys " in
+    *" $existing "*) ;;
+    *) echo "wg-sync: removing peer no longer in the registry: $existing" >&2
+       wg set wg0 peer "$existing" remove ;;
+  esac
+done
+
 unset VAULT_TOKEN
 SYNC
 chmod 0755 /usr/local/bin/wg-sync-peers.sh
