@@ -100,7 +100,7 @@ class DownloadModeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             p = subprocess.run(
                 ["bash", "-c", 'umask 022; ( umask 077; printf secret > f ); '
-                               'stat -f %Lp f 2>/dev/null || stat -c %a f'],
+                               'stat -c %a f 2>/dev/null || stat -f %Lp f'],
                 capture_output=True, text=True, cwd=tmp, timeout=30)
             self.assertEqual(p.stdout.strip(), "600",
                              f"the subshell umask idiom did not yield 0600: {p.stdout!r}")

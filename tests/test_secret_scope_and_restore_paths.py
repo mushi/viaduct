@@ -99,7 +99,7 @@ class GcpRestorePathTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             p = subprocess.run(
                 ["bash", "-c", 'd="$(umask 077; mktemp -d)"; '
-                               'stat -f %Lp "$d" 2>/dev/null || stat -c %a "$d"; rmdir "$d"'],
+                               'stat -c %a "$d" 2>/dev/null || stat -f %Lp "$d"; rmdir "$d"'],
                 capture_output=True, text=True, cwd=tmp, timeout=30)
             self.assertEqual(p.stdout.strip(), "700",
                              f"umask 077 + mktemp -d did not yield 0700: {p.stdout!r}")

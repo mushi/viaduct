@@ -54,8 +54,8 @@ class Vuln028TempKeypairTest(unittest.TestCase):
     def test_a_umask_077_mktemp_actually_yields_0600(self):
         """Behavioural: prove the idiom used produces a private file."""
         with tempfile.TemporaryDirectory() as tmp:
-            p = run('f="$(umask 077; mktemp)"; printf secret > "$f"; stat -f %Lp "$f" 2>/dev/null '
-                    '|| stat -c %a "$f"; rm -f "$f"', tmp)
+            p = run('f="$(umask 077; mktemp)"; printf secret > "$f"; stat -c %a "$f" 2>/dev/null '
+                    '|| stat -f %Lp "$f"; rm -f "$f"', tmp)
             self.assertEqual(p.stdout.strip(), "600",
                              f"umask 077 + mktemp did not produce a 0600 file: {p.stdout!r}")
 
@@ -79,7 +79,7 @@ class Vuln042KeyMaterialModeTest(unittest.TestCase):
     def test_write_then_chmod_yields_a_readable_window(self):
         """Behavioural: demonstrate why creation mode, not chmod, is the control."""
         with tempfile.TemporaryDirectory() as tmp:
-            p = run('umask 022; printf secret > f; stat -f %Lp f 2>/dev/null || stat -c %a f', tmp)
+            p = run('umask 022; printf secret > f; stat -c %a f 2>/dev/null || stat -f %Lp f', tmp)
             self.assertNotEqual(
                 p.stdout.strip(), "600",
                 "the ambient umask already yields 0600 here, so this environment cannot "
@@ -192,7 +192,7 @@ class Vuln028KeypairTempFileBehaviourTest(unittest.TestCase):
         # temporary file at the moment the private key lands in it.
         (binp / "xray").write_text(
             f'#!/usr/bin/env bash\n'
-            f'{{ stat -f %Lp /dev/fd/1 2>/dev/null || stat -c %a /dev/fd/1; }} > "{modelog}"\n'
+            f'{{ stat -c %a /dev/fd/1 2>/dev/null || stat -f %Lp /dev/fd/1; }} > "{modelog}"\n'
             f'printf "PrivateKey: %s\\nPublicKey: %s\\n" '
             f'"cHJpdmF0ZS1rZXktZm9yLXRlc3RzLW9ubHktbm90LXJlYWw=" '
             f'"cHVibGljLWtleS1mb3ItdGVzdHMtb25seS1ub3QtcmVhbHg="\n')
