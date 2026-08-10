@@ -182,13 +182,17 @@ fi
 #    healthy after the startup re-run above) ─────────────────────────────────────
 for _ in $(seq 1 30); do /usr/local/bin/spire-server healthcheck >/dev/null 2>&1 && break; sleep 2; done
 /usr/local/bin/spire-server healthcheck >/dev/null 2>&1 || { log "ERROR: spire-server not healthy"; exit 1; }
-/usr/local/bin/spire-server bundle show -format pem > /tmp/gcp-root.pem
+# Same class as the fixed /tmp paths removed from startup.sh: the bundle itself is
+# public, so there is nothing to disclose, but a fixed name written by root in a
+# world-writable directory can be pre-created as a symlink and redirect the write.
+GCP_ROOT_PEM="$(umask 077; mktemp /tmp/gcp-root.XXXXXXXX)"
+/usr/local/bin/spire-server bundle show -format pem > "$GCP_ROOT_PEM"
 vault write auth/cert/certs/hetzner-vault-agent \
   display_name=hetzner-vault-agent policies=hetzner-vault-agent \
-  certificate=@/tmp/gcp-root.pem \
+  certificate=@"$GCP_ROOT_PEM" \
   allowed_uri_sans="spiffe://${TRUST_DOMAIN}/hetzner/vault-agent" \
   token_ttl=20m token_max_ttl=1h >/dev/null
-rm -f /tmp/gcp-root.pem
+rm -f "$GCP_ROOT_PEM"
 log "hetzner-vault-agent cert role ready"
 
 log "Bootstrap complete. Seed the workload secrets (this script revoked root and cleared"

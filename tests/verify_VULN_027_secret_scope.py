@@ -21,6 +21,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FETCH = REPO_ROOT / "scripts" / "fetch-hetzner-secrets.sh"
 GCP = REPO_ROOT / "gcp" / "scripts" / "startup.sh"
+BOOTSTRAP = REPO_ROOT / "gcp" / "scripts" / "bootstrap-vault.sh"
 
 
 def uncommented(path: Path) -> str:
@@ -103,6 +104,34 @@ class GcpRestorePathTest(unittest.TestCase):
             self.assertEqual(p.stdout.strip(), "700",
                              f"umask 077 + mktemp -d did not yield 0700: {p.stdout!r}")
 
+
+
+class SweepSiblingTest(unittest.TestCase):
+    """The root-cause sweep for VULN-045 turned up one more fixed /tmp path.
+
+    bootstrap-vault.sh stages the SPIRE root bundle at /tmp/gcp-root.pem as root.
+    The bundle is public, so there is nothing to disclose — but a fixed name in a
+    world-writable directory can be pre-created as a symlink, and the write then
+    lands wherever the attacker points it, as root. Same class, different file, so
+    it gets the same treatment.
+    """
+
+    def setUp(self):
+        self.body = uncommented(BOOTSTRAP)
+
+    def test_no_fixed_root_bundle_path(self):
+        fixed = re.findall(r"/tmp/gcp-root\.pem", self.body)
+        self.assertEqual(
+            fixed, [],
+            "the SPIRE root bundle is still staged at a fixed /tmp path, so a "
+            "pre-created symlink redirects a root-owned write")
+
+    def test_the_bundle_is_still_staged_and_registered(self):
+        """Anchor: the negative assertion above would pass on a deleted block."""
+        self.assertIn("mktemp /tmp/gcp-root.XXXXXXXX", self.body,
+                      "the bundle is no longer staged through mktemp")
+        self.assertIn('certificate=@"$GCP_ROOT_PEM"', self.body,
+                      "the cert role no longer receives the staged bundle")
 
 if __name__ == "__main__":
     unittest.main()
