@@ -555,8 +555,32 @@ cat > /usr/local/bin/wg-register-peer.sh <<'REG'
 set -euo pipefail
 name="${1:?peer name required}"; pub="${2:?public key required}"; ip="${3:?mesh ip required}"
 case "$name" in *[!a-z0-9-]*) echo "invalid peer name: $name" >&2; exit 1 ;; esac
+. /usr/local/bin/lib/wg-validate.sh
+vh_is_wg_key "$pub"       || { echo "invalid public key for peer '$name'" >&2; exit 1; }
+vh_is_peer_mesh_ip "$ip"  || { echo "invalid or reserved mesh ip '$ip' for peer '$name'" >&2; exit 1; }
 export VAULT_ADDR="https://127.0.0.1:8200" VAULT_CACERT="/opt/vault/tls/vault.crt"
 VAULT_TOKEN="$(vault login -method=gcp -token-only role=wireguard-hub type=gce)"; export VAULT_TOKEN
+
+# Registration is idempotent for an IDENTICAL key and refused otherwise.
+#
+# Previously any caller could re-register an existing name: the script returned that
+# peer's PSK on stdout and overwrote its public_key, so invoking it was a complete
+# takeover of an established peer. Requiring the key to match makes the PSK disclosure
+# conditional on already holding that peer's identity.
+#
+# The identical-key path must keep working: terraform_data.provision re-runs on any
+# users.txt, alloy or probe/ change, and re-registers 'hetzner' with the key cloud-init
+# generated once (it persists — see the `[ ! -f /etc/wireguard/wg0.key ]` guard).
+existing_pub="$(vault kv get -field=public_key "kv/wireguard/peers/$name" 2>/dev/null || true)"
+if [ -n "$existing_pub" ] && [ "$existing_pub" != "$pub" ]; then
+  echo "ERROR: peer '$name' is already registered with a different public key." >&2
+  echo "       Refusing to replace it or disclose its preshared key." >&2
+  echo "       A genuinely rebuilt spoke must have its registry entry removed first:" >&2
+  echo "         vault kv delete kv/wireguard/peers/$name" >&2
+  unset VAULT_TOKEN
+  exit 1
+fi
+
 psk="$(vault kv get -field=psk "kv/wireguard/peers/$name" 2>/dev/null || true)"
 [ -n "$psk" ] || psk="$(wg genpsk)"
 vault kv put "kv/wireguard/peers/$name" public_key="$pub" mesh_ip="$ip" psk="$psk" >/dev/null
