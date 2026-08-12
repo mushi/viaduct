@@ -596,6 +596,13 @@ write_files:
       #!/usr/bin/env bash
       set -euo pipefail
 
+      # Everything this script writes is key material: the Reality private key, the
+      # client UUIDs and config.json, which contains both. Branch-local umasks left
+      # config.json born 0644 on every re-apply (the keypair branch is skipped once
+      # the keypair exists), so set it once here and let the later chmods narrow
+      # further where a group genuinely needs read.
+      umask 077
+
       CONFIG_DIR=/etc/xray
       CONFIG_FILE=$CONFIG_DIR/config.json
       KEYPAIR_FILE=$CONFIG_DIR/keypair.env
@@ -704,6 +711,16 @@ write_files:
       #
       # Emitted only when SERVER_IP looks like an IPv4 address — an empty or malformed
       # value would render "/32" into the JSON and make Xray fail to parse its config.
+      # The node's own IPv6 address needs the same treatment: hcloud_server has no
+      # public_net block, so a routable v6 address is assigned by default and an
+      # authenticated VLESS user could otherwise dial [<node-v6>]:22 and reach sshd.
+      SERVER_IPV6=$(ip -6 addr show scope global 2>/dev/null \
+                    | awk '/inet6/ {print $2}' | cut -d/ -f1 | head -n1)
+      SELF_IP6_RULE=""
+      if [[ "$${SERVER_IPV6:-}" =~ ^[0-9a-fA-F:]+$ ]]; then
+        SELF_IP6_RULE="            { \"type\": \"field\", \"ip\": [\"$SERVER_IPV6/128\"], \"outboundTag\": \"block\" },"
+      fi
+
       SELF_IP_RULE=""
       if printf '%s' "$SERVER_IP" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then
         SELF_IP_RULE="            { \"type\": \"field\", \"ip\": [\"$SERVER_IP/32\"], \"outboundTag\": \"block\" },"
@@ -723,6 +740,15 @@ write_files:
 
         if [[ -f "$UUID_FILE" ]]; then
           USER_UUID=$(cat "$UUID_FILE")
+          # Restored from backup, so it is whatever the previous node wrote — and it
+          # is interpolated into config.json and into every generated client URI.
+          # Refuse rather than regenerate: silently minting a new UUID would revoke a
+          # working client without telling anyone.
+          if [[ ! "$USER_UUID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+            echo "ERROR: $UUID_FILE does not contain a UUID; refusing to render it into" >&2
+            echo "       config.json and the client URIs. Remove the file to mint a new one." >&2
+            exit 1
+          fi
           echo "Reusing UUID for: $USERNAME"
         else
           USER_UUID=$(/usr/local/bin/xray uuid)
@@ -912,7 +938,8 @@ write_files:
             { "type": "field", "inboundTag": ["api"],        "outboundTag": "api" },
             { "type": "field", "inboundTag": ["metrics_in"], "outboundTag": "direct" },
             $SELF_IP_RULE
-            { "type": "field", "ip": ["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","127.0.0.0/8","169.254.0.0/16","100.64.0.0/10","fc00::/7","::1/128"], "outboundTag": "block" },
+            $SELF_IP6_RULE
+            { "type": "field", "ip": ["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","127.0.0.0/8","169.254.0.0/16","100.64.0.0/10","fc00::/7","::1/128","fe80::/10"], "outboundTag": "block" },
             { "type": "field", "ip": ["geoip:ir"], "outboundTag": "block" },
             { "type": "field", "domain": ["geosite:category-ir"], "outboundTag": "block" }
           ]
@@ -940,6 +967,10 @@ runcmd:
   - mkdir -p /var/lib/conduit/data
   - chown -R conduit:conduit /var/lib/conduit
   - mkdir -p /etc/xray/clients
+  - chown root:xray /etc/xray
+  # 0755 let any local account reach probe-client.json and config.json.
+  # Both readers run as xray:xray, so the group keeps its access.
+  - chmod 0750 /etc/xray
   - chmod 700 /etc/xray/clients
   - mkdir -p /var/lib/xray-exporter
   - chown xray:xray /var/lib/xray-exporter

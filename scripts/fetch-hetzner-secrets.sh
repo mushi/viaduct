@@ -55,13 +55,42 @@ kv() { vapi -H "X-Vault-Token: $TOKEN" "$VAULT_ADDR/v1/kv/data/hetzner/$1" | jq 
 
 # 4. Render Grafana creds (Alloy EnvironmentFile) and the Cloudflare token (certbot ini).
 #    Group alloy is inherited from the setgid dir; alloy reads grafana.env, root reads the ini.
+#
+#    These four values go unescaped into two config-file sinks. grafana.env is a
+#    systemd EnvironmentFile, so a newline in a value declares a further variable;
+#    cloudflare.ini is parsed the same way by certbot. Validate before rendering and
+#    refuse rather than write something unintended — the AWS side of this same data
+#    is guarded identically in aws/k8s/20-alloy.yaml.
+vh_reject() {
+  echo "ERROR: $1 from Vault is empty or carries characters that would add a" >&2
+  echo "       directive to the rendered file; refusing to render." >&2
+  exit 1
+}
+vh_check() {  # name value extended-regex
+  [ -n "$2" ] || vh_reject "$1"
+  # grep is line-oriented, so a multi-line value could satisfy it line by line
+  # while still injecting. Reject those before the pattern is applied at all.
+  [ "$(printf '%s' "$2" | wc -l)" -eq 0 ] || vh_reject "$1"
+  printf '%s' "$2" | grep -qE "$3" || vh_reject "$1"
+}
+
+GRAFANA_URL_V="$(kv grafana prometheus_url)"
+GRAFANA_USER_V="$(kv grafana prometheus_user)"
+GRAFANA_KEY_V="$(kv grafana api_key)"
+CF_TOKEN_V="$(kv cloudflare api_token)"
+
+vh_check prometheus_url  "$GRAFANA_URL_V"  '^https://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$'
+vh_check prometheus_user "$GRAFANA_USER_V" '^[A-Za-z0-9._@-]+$'
+vh_check api_key         "$GRAFANA_KEY_V"  '^[A-Za-z0-9._=+/-]+$'
+vh_check cf_api_token    "$CF_TOKEN_V"     '^[A-Za-z0-9._-]+$'
+
 {
-  printf 'GRAFANA_URL=%s\n'  "$(kv grafana prometheus_url)"
-  printf 'GRAFANA_USER=%s\n' "$(kv grafana prometheus_user)"
-  printf 'GRAFANA_KEY=%s\n'  "$(kv grafana api_key)"
+  printf 'GRAFANA_URL=%s\n'  "$GRAFANA_URL_V"
+  printf 'GRAFANA_USER=%s\n' "$GRAFANA_USER_V"
+  printf 'GRAFANA_KEY=%s\n'  "$GRAFANA_KEY_V"
 } > "$RUN/grafana.env"
 
-printf 'dns_cloudflare_api_token = %s\n' "$(kv cloudflare api_token)" > "$RUN/cloudflare.ini"
+printf 'dns_cloudflare_api_token = %s\n' "$CF_TOKEN_V" > "$RUN/cloudflare.ini"
 
 # Alloy reads grafana.env, so that one keeps the group. certbot runs as root and is
 # the only consumer of the Cloudflare token — a token that can create DNS records

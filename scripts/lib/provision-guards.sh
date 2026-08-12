@@ -70,6 +70,16 @@ vh_is_uid() {
 # Apply a validator and abort loudly when it rejects. The offending value is
 # printed with non-printing characters escaped (%q) so a payload containing
 # newlines or control characters cannot forge surrounding log lines.
+# vh_is_uuid <value>
+#
+# A client UUID restored from backup is node-authored material: it is re-uploaded to
+# /etc/xray/clients and rendered into config.json and every client URI. Shape-check it
+# at both ends of the round trip so a compromised node cannot plant a value that
+# survives a rebuild.
+vh_is_uuid() {
+    [[ "${1:-}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
+}
+
 vh_require() {
     local validator="$1" label="$2" value="${3:-}"
 
