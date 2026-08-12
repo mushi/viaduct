@@ -48,7 +48,11 @@ exit 0
     for f in binp.iterdir():
         f.chmod(0o755)
 
-    body = GUARDRAIL.read_text().replace("/var/lib/viaduct-textfile", str(txt))
+    body = (GUARDRAIL.read_text()
+            .replace("/var/lib/viaduct-textfile", str(txt))
+            # The escalation ladder persists the previous reading; redirect it too,
+            # or the script cannot write state and degrades to "never stop".
+            .replace("/var/lib/viaduct-guardrail", str(Path(tmp) / "state")))
     env = dict(os.environ, PATH=f"{binp}:{os.environ['PATH']}")
     proc = subprocess.run(["bash", "-c", body], capture_output=True, text=True, env=env, timeout=60)
     proc.stopped = stopped.exists()
@@ -65,13 +69,31 @@ class GuardrailUnknownTest(unittest.TestCase):
             self.assertIn("aws_mtd_egress_bytes", p.textfile,
                           f"no metrics written (rc={p.returncode}, stderr={p.stderr[:200]})")
 
-    def test_a_genuine_reading_over_cap_still_stops(self):
-        """The cap must keep working — this is the guardrail's whole purpose."""
+    def test_a_genuine_reading_over_cap_stops_once_sustained(self):
+        """The cap must keep working — this is the guardrail's whole purpose.
+
+        Amended for VULN-036. This asserted that a SINGLE over-cap reading stops the
+        instance, which was precisely the defect: egress through the proxy is
+        unauthenticated, so one aggregate counter was a kill switch anyone could reach.
+        The contract is now that the first over-cap reading throttles and alerts and
+        the second one stops. The cap is still enforced — it just takes a trend rather
+        than a datapoint. See test_egress_guardrail_escalation.py for the full ladder.
+        """
         with tempfile.TemporaryDirectory() as tmp:
-            p = run_guardrail(tmp, OVER_CAP)
-            self.assertTrue(p.stopped,
-                            f"a genuine over-cap reading no longer stops the instance "
-                            f"(rc={p.returncode}, stderr={p.stderr[:200]})")
+            first = run_guardrail(tmp, OVER_CAP)
+            self.assertFalse(
+                first.stopped,
+                f"a single over-cap reading still stops the instance "
+                f"(rc={first.returncode}, stderr={first.stderr[:200]})")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "state"; state.mkdir()
+            (state / "last").write_text(f"{OVER_CAP} 1\n")
+            second = run_guardrail(tmp, OVER_CAP)
+            self.assertTrue(
+                second.stopped,
+                f"sustained over-cap egress no longer stops the instance "
+                f"(rc={second.returncode}, stderr={second.stderr[:200]})")
 
     def test_unknown_is_not_reported_as_zero_egress(self):
         """VULN-026: 'None' must not silently become 0 GB."""
