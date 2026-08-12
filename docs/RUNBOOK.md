@@ -90,6 +90,8 @@ from Vault via its SPIRE SVID (AWS Alloy, and Hetzner's Grafana + Cloudflare):
 
 ```sh
 vault login -method=gcp role=admin type=gce      # your login from here on; there is no standing root token
+# Scope of this login, and the risks deliberately accepted around it:
+# see docs/ACCEPTED-RISKS.md
 # This login can seed kv/aws/* and kv/hetzner/*, clear a stale peer registration,
 # and read policies — it deliberately cannot create policies, auth roles or mounts.
 # Re-provisioning Vault needs a fresh root token: `vault operator generate-root`
