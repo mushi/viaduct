@@ -590,6 +590,22 @@ if [ -n "$existing_pub" ] && [ "$existing_pub" != "$pub" ]; then
   exit 1
 fi
 
+# A mesh_ip may be held by exactly one name. The applier skips a duplicate claim,
+# but that only decides which peer wins — the loser is still evicted, and the winner
+# is chosen by lexical order of the registry, so a well-named attacker takes the
+# address. Refusing the registration is what actually keeps the binding stable.
+for existing_name in $(vault kv list -format=json kv/wireguard/peers 2>/dev/null \
+                       | tr -d '[]", ' | grep -v '^$' || true); do
+  [ "$existing_name" = "$name" ] && continue
+  existing_ip="$(vault kv get -field=mesh_ip "kv/wireguard/peers/$existing_name" 2>/dev/null || true)"
+  if [ "$existing_ip" = "$ip" ]; then
+    echo "ERROR: mesh ip '$ip' is already registered to peer '$existing_name'." >&2
+    echo "       Refusing to register '$name' on an address another peer holds." >&2
+    unset VAULT_TOKEN
+    exit 1
+  fi
+done
+
 psk="$(vault kv get -field=psk "kv/wireguard/peers/$name" 2>/dev/null || true)"
 [ -n "$psk" ] || psk="$(wg genpsk)"
 vault kv put "kv/wireguard/peers/$name" public_key="$pub" mesh_ip="$ip" psk="$psk" >/dev/null

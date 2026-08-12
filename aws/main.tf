@@ -124,9 +124,11 @@ resource "aws_iam_role_policy" "kms" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      # Non-destructive operations. kms:CreateKey and the List* actions cannot be
-      # resource-scoped by AWS, so these keep Resource "*"; the blast radius is
-      # enumeration and key creation, not destruction.
+      # Operations AWS cannot resource-scope: CreateKey has no resource yet, and the
+      # List* actions are account-level by definition. CreateAlias and TagResource
+      # also act on a key that has no SPIRE_SERVER/ alias yet, so a ResourceAliases
+      # condition would deny SPIRE its own first alias. What remains here is
+      # enumeration, key creation and metadata — no signing and no destruction.
       {
         Effect = "Allow"
         Action = [
@@ -136,7 +138,6 @@ resource "aws_iam_role_policy" "kms" {
           "kms:ListKeys",
           "kms:ListAliases",
           "kms:CreateAlias",
-          "kms:Sign",
           "kms:TagResource"
         ]
         Resource = "*"
@@ -150,7 +151,11 @@ resource "aws_iam_role_policy" "kms" {
         Action = [
           "kms:ScheduleKeyDeletion",
           "kms:UpdateAlias",
-          "kms:DeleteAlias"
+          "kms:DeleteAlias",
+          # Signing belongs here, not above: unscoped it let the instance role sign
+          # with every asymmetric KMS key in the account, which is the other half of
+          # what this finding named. SPIRE aliases a key before it ever signs with it.
+          "kms:Sign"
         ]
         Resource = "*"
         Condition = {

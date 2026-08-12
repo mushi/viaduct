@@ -198,6 +198,13 @@ if [[ -d "$UUID_DIR" ]]; then
   if [[ ${#UUID_FILES[@]} -gt 0 ]]; then
     log "Uploading ${#UUID_FILES[@]} UUID file(s)..."
     for f in "${UUID_FILES[@]}"; do
+      # These came off a node on some earlier run. Shape-check before pushing them
+      # back: the node renders them into config.json and every client URI.
+      if ! vh_is_uuid "$(cat "$f")"; then
+        log "ERROR: $f does not contain a UUID. Refusing to upload it."
+        log "       A backup carrying a planted value would otherwise survive a rebuild."
+        exit 1
+      fi
       upload "$f" "/etc/xray/clients/$(basename "$f")" "600"
     done
   else
@@ -431,7 +438,15 @@ while IFS= read -r rf; do
   [[ -z "$rf" ]] && continue
   name=$(basename "$rf")
   if download "$rf" "$BACKUPS_DIR/clients/$name"; then
-    log "  Saved backups/clients/$name"
+    # The remote listing is produced by the node, so treat every .uuid it hands
+    # back as untrusted until it looks like a UUID. Discard rather than store:
+    # a bad value kept here is re-uploaded on the next apply.
+    if [[ "$name" == *.uuid ]] && ! vh_is_uuid "$(cat "$BACKUPS_DIR/clients/$name")"; then
+      rm -f "$BACKUPS_DIR/clients/$name"
+      log "  WARNING: $name from the node is not a UUID — discarded, not backed up."
+    else
+      log "  Saved backups/clients/$name"
+    fi
   fi
 done < <($SSH -- "sudo sh -c 'ls /etc/xray/clients/*.uuid /etc/xray/clients/*.txt 2>/dev/null || true'")
 
