@@ -911,7 +911,7 @@ write_files:
           "rules": [
             { "type": "field", "inboundTag": ["api"],        "outboundTag": "api" },
             { "type": "field", "inboundTag": ["metrics_in"], "outboundTag": "direct" },
-$SELF_IP_RULE
+            $SELF_IP_RULE
             { "type": "field", "ip": ["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","127.0.0.0/8","169.254.0.0/16","100.64.0.0/10","fc00::/7","::1/128"], "outboundTag": "block" },
             { "type": "field", "ip": ["geoip:ir"], "outboundTag": "block" },
             { "type": "field", "domain": ["geosite:category-ir"], "outboundTag": "block" }
@@ -1031,10 +1031,10 @@ runcmd:
   # run on the box via the certbot timer, reading the tmpfs credentials.
   - |
     cat > /etc/nginx/conf.d/site.conf <<'NGINX_CONF'
-# Shared state for the per-client limits applied to the unauthenticated /api location.
-# Declared here because conf.d is included in the http context.
-limit_conn_zone $binary_remote_addr zone=api_conn:10m;
-limit_req_zone  $binary_remote_addr zone=api_req:10m rate=30r/s;
+    # Shared state for the per-client limits applied to the unauthenticated /api location.
+    # Declared here because conf.d is included in the http context.
+    limit_conn_zone $binary_remote_addr zone=api_conn:10m;
+    limit_req_zone  $binary_remote_addr zone=api_req:10m rate=30r/s;
     server {
         listen 80 default_server;
         listen [::]:80 default_server;
