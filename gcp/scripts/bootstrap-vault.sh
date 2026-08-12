@@ -112,35 +112,49 @@ log "cert-auth policies ready"
 # ── gcp auth: operator admin + restore-agent + wireguard-hub roles ────────────
 has auth "gcp/" || vault auth enable gcp
 
-# Scoped to what this script actually calls. The role below is bound to the instance's
-# own service account, and any local uid on the hub can reach the GCE metadata server —
-# so a blanket sys/* + auth/* sudo grant made "root on the box" equal "root in Vault".
-# Narrowing does not change who can obtain the token; it changes what the token can do.
-# sudo is kept only on the two root-protected endpoints bootstrap genuinely needs
-# (mounting engines/auth methods, and generating the PKI root).
+# The role below is bound to the instance's own service account, and any local uid on
+# the hub can reach the GCE metadata server — so this token is obtainable by anything
+# running on the box. Narrowing does not change who can obtain it; it changes what it
+# can do, and that only helps if the surviving grants cannot rebuild the lost ones.
+#
+# An earlier narrowing left `sys/policies/acl/*` create/update and `auth/gcp/role/*`
+# create/update in place. Together those are a complete escalation: write an
+# unrestricted policy, bind a new gcp role to this same service account, log in
+# again. The narrowing was therefore cosmetic. Neither is needed at steady state —
+# every mount, auth method, policy, role and the PKI root is provisioned above under
+# the init root token, before it is revoked. Re-provisioning needs a deliberately
+# generated root token (`vault operator generate-root`), which is the point: it is an
+# explicit, auditable act rather than something any local uid can mint from metadata.
+#
+# What is left is the operator surface RUNBOOK.md actually documents: seeding the
+# workload secrets, clearing a stale peer registration, and read-only introspection.
 vault policy write admin - <<'EOF'
-# `has secrets` / `has auth` list, then enable kv, pki, approle, cert and gcp.
+# Seeding and rotating the workload secrets (RUNBOOK.md "Vault bootstrap").
+path "kv/data/aws/*"             { capabilities = ["create", "read", "update", "delete"] }
+path "kv/data/hetzner/*"         { capabilities = ["create", "read", "update", "delete"] }
+path "kv/metadata/aws/*"         { capabilities = ["read", "list", "delete"] }
+path "kv/metadata/hetzner/*"     { capabilities = ["read", "list", "delete"] }
+
+# Clearing a stale peer registration is the documented recovery for a rebuilt spoke
+# whose key changed. kv/data/wireguard/hub is deliberately absent: that is the hub's
+# own WireGuard private key, and only the hub's role has any business reading it.
+path "kv/data/wireguard/peers/*"     { capabilities = ["read", "delete"] }
+path "kv/metadata/wireguard/peers/*" { capabilities = ["read", "list", "delete"] }
+path "kv/metadata/wireguard"         { capabilities = ["list"] }
+
+# Read-only introspection: see what is mounted and which policies exist, change
+# neither. A `read` on sys/policies/acl/* is what makes an audit possible; the
+# create/update that made it an escalation is gone.
 path "sys/mounts"            { capabilities = ["read", "list"] }
-path "sys/mounts/*"          { capabilities = ["create", "read", "update", "delete", "sudo"] }
 path "sys/auth"              { capabilities = ["read", "list"] }
-path "sys/auth/*"            { capabilities = ["create", "read", "update", "delete", "sudo"] }
+path "sys/policies/acl"      { capabilities = ["list"] }
+path "sys/policies/acl/*"    { capabilities = ["read"] }
+path "auth/approle/role"     { capabilities = ["list"] }
+path "auth/cert/certs"       { capabilities = ["list"] }
+path "auth/gcp/role"         { capabilities = ["list"] }
 
-# vault policy write ...
-path "sys/policies/acl/*"    { capabilities = ["create", "read", "update", "delete", "list"] }
-
-# AppRoles, cert auth and the gcp roles this script provisions.
-path "auth/approle/role/*"   { capabilities = ["create", "read", "update", "delete", "list"] }
-path "auth/cert/certs/*"     { capabilities = ["create", "read", "update", "delete", "list"] }
-path "auth/gcp/role/*"       { capabilities = ["create", "read", "update", "delete", "list"] }
-
-# Secrets the operator manages.
-path "kv/*"                  { capabilities = ["create", "read", "update", "delete", "list"] }
-
-# PKI: read the existing root (the regeneration guard) and generate it once.
+# PKI: inspect the issued chain. Root generation stays with the root token.
 path "pki/cert/*"            { capabilities = ["read", "list"] }
-path "pki/root/generate/*"   { capabilities = ["create", "update", "sudo"] }
-path "pki/roles/*"           { capabilities = ["create", "read", "update", "delete", "list"] }
-path "pki/issue/*"           { capabilities = ["create", "update"] }
 EOF
 vault write auth/gcp/role/admin type=gce project_id="$PROJECT" bound_zones="$ZONE" \
   bound_service_accounts="$SA_EMAIL" policies=admin token_ttl=20m token_max_ttl=2h >/dev/null

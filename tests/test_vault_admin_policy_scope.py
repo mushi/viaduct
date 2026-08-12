@@ -8,6 +8,14 @@ reach the GCE metadata server, so any of them could mint that token.
 Per the operator's decision the binding is retained and the policy is narrowed, so the
 token can no longer seal the cluster, disable audit devices, read sys/raw, or rewrite
 unrelated auth backends. These assertions read the emitted policy HCL.
+
+Superseded in part: this file originally required the admin policy to keep the
+provisioning grants "which bootstrap-vault.sh itself calls". That premise was wrong.
+Bootstrap demands the init root token at the top and revokes it at the very end; its
+only `role=admin` login is `-token-only ... >/dev/null`, a liveness check before the
+revoke. Nothing in bootstrap ever operates as admin, so keeping those grants bought
+nothing and left `sys/policies/acl/*` + `auth/gcp/role/*` as a complete escalation.
+See test_vault_admin_escalation_paths.py, which asserts they are gone.
 """
 
 import re
@@ -17,15 +25,15 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP = REPO_ROOT / "gcp" / "scripts" / "bootstrap-vault.sh"
 
-# Paths bootstrap-vault.sh genuinely uses; narrowing must not remove them.
+# The standing operator surface RUNBOOK.md documents. Narrowing must not remove
+# these — unlike the provisioning grants, which belong to the root token.
 REQUIRED = [
-    "sys/mounts",           # `has secrets` + secrets enable kv/pki
-    "sys/auth",             # `has auth` + auth enable approle/cert/gcp
-    "sys/policies/acl/",    # vault policy write
-    "auth/approle/role/",   # spire-server, snapshot-saver, aws-certrole-refresh
-    "auth/cert/certs/",     # hetzner-vault-agent
-    "auth/gcp/role/",       # admin, restore-agent, wireguard-hub
-    "pki/",                 # root generation
+    "kv/data/aws/",              # vault kv put kv/aws/grafana
+    "kv/data/hetzner/",          # vault kv put kv/hetzner/{grafana,cloudflare}
+    "kv/data/wireguard/peers/",  # clearing a stale registration (VULN-012 recovery)
+    "sys/mounts",                # read-only introspection
+    "sys/auth",                  # read-only introspection
+    "pki/cert/",                 # inspect the issued chain
 ]
 
 
@@ -72,14 +80,18 @@ class AdminPolicyScopeTest(unittest.TestCase):
                     f'specific endpoints bootstrap needs',
                 )
 
-    def test_bootstrap_still_has_what_it_uses(self):
-        """Narrowing must not break `terraform apply` on the next run."""
+    def test_the_documented_operator_surface_survives(self):
+        """Narrowing must not lock the operator out of the RUNBOOK steps.
+
+        Note this deliberately no longer requires the provisioning paths. Bootstrap
+        runs under the init root token, so those never belonged to the standing login.
+        """
         joined = " ".join(self.paths)
         for needed in REQUIRED:
             self.assertIn(
                 needed, joined,
-                f"the admin policy no longer covers {needed!r}, which bootstrap-vault.sh "
-                f"itself calls — the next apply would fail",
+                f"the admin policy no longer covers {needed!r}, which RUNBOOK.md "
+                f"documents as an operator step",
             )
 
 
