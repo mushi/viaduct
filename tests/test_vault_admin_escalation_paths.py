@@ -134,6 +134,39 @@ class ProvisioningStaysWithRootTest(unittest.TestCase):
             "root is revoked before the admin login is verified")
 
 
+class AcceptedRiskRecordMatchesThePolicyTest(unittest.TestCase):
+    """The record has to describe what the token actually reaches.
+
+    It originally said only that the escalation primitives and the hub key were
+    gone. Both true, and both an understatement: the token still holds full CRUD
+    over the workload secrets, including the Cloudflare DNS-edit token. An
+    acceptance that describes less than the real residual is worse than none — it
+    is read later as reassurance. This fails if the policy gains a secret-bearing
+    path the record does not name.
+    """
+
+    RECORD = Path(__file__).resolve().parents[1] / "docs" / "ACCEPTED-RISKS.md"
+
+    def test_every_writable_secret_path_is_named_in_the_record(self):
+        text = self.RECORD.read_text()
+        writable = [p for p, caps in rules(policy("admin"))
+                    if p.startswith("kv/data/") and caps & {"create", "update", "delete"}]
+        self.assertTrue(writable, "parsed no writable kv paths — the check would be vacuous")
+        for path in writable:
+            with self.subTest(path=path):
+                self.assertIn(
+                    path, text,
+                    f"the admin policy grants write on {path}, which docs/ACCEPTED-RISKS.md "
+                    f"does not mention — the recorded residual is smaller than the real one")
+
+    def test_the_record_names_the_credential_that_matters(self):
+        """Anchor: naming the path is not the same as saying what is behind it."""
+        text = self.RECORD.read_text()
+        self.assertRegex(text, r"(?i)cloudflare",
+                         "the record does not say the token reaches the Cloudflare "
+                         "DNS-edit credential, which can issue certs for the zone")
+
+
 class AppRolePoliciesStayMinimalTest(unittest.TestCase):
     """VULN-007's Arm A capabilities — each already a single path. Guard against drift."""
 
