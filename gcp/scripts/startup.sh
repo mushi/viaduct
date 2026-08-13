@@ -110,6 +110,33 @@ chown -R vault:vault /opt/vault /etc/vault.d
 chmod 600 /opt/vault/tls/vault.key
 chmod 640 /etc/vault.d/vault.hcl
 
+# ── 4b. Audit log destination ────────────────────────────────────────────────
+# Vault refuses a request when EVERY enabled audit device fails to write, so an
+# audit device is also an availability dependency. bootstrap-vault.sh enables two
+# (file + syslog) precisely so a full disk here cannot wedge Vault: syslog still
+# succeeds and the request proceeds. This directory is the file device's target.
+install -d -o vault -g vault -m 0700 /var/log/vault
+
+# Rotate before the disk fills. Vault reopens the file on SIGHUP; copytruncate is
+# deliberately NOT used, because truncating out from under an audit writer loses
+# records — which is the one thing an audit log may not do.
+cat > /etc/logrotate.d/vault-audit <<'ROTATE'
+/var/log/vault/audit.log {
+  daily
+  rotate 14
+  size 64M
+  missingok
+  notifempty
+  compress
+  delaycompress
+  su vault vault
+  create 0600 vault vault
+  postrotate
+    systemctl kill -s SIGHUP --kill-who=main vault.service 2>/dev/null || true
+  endscript
+}
+ROTATE
+
 # ── 5. Start Vault (comes up sealed + uninitialised on first boot) ───────────
 systemctl enable vault
 systemctl restart vault

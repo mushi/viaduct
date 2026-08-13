@@ -37,6 +37,22 @@ CERTROLE_ROLE_ID="$(md instance/attributes/aws-certrole-approle-role-id)"
 
 has() { vault "$1" list -format=json 2>/dev/null | jq -e --arg k "$2" 'has($k)' >/dev/null 2>&1; }
 
+# ── Audit devices ─────────────────────────────────────────────────────────────
+# Enabled FIRST, so everything this script then does is on the record — including
+# the root-token operations and the revoke at the end.
+#
+# Two devices, deliberately. Vault fails a request only when EVERY enabled device
+# fails to write, so a single file device turns a full /var/log into a Vault
+# outage. With syslog alongside it, a disk problem degrades to "one device is
+# failing" instead of "Vault refuses requests". The file device is the one to read
+# for forensics; syslog is the availability backstop (and reaches journald, so it
+# survives the disk filling).
+#
+# `has audit` keys on the device path, which is "file/" and "syslog/".
+has audit "file/"   || vault audit enable file file_path=/var/log/vault/audit.log
+has audit "syslog/" || vault audit enable syslog tag=vault facility=AUTH
+log "audit devices ready (file + syslog)"
+
 # ── KV v2 ─────────────────────────────────────────────────────────────────────
 has secrets "kv/" || vault secrets enable -path=kv kv-v2
 log "KV ready"
