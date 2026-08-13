@@ -26,7 +26,7 @@ variable "ops_ssh_key_path" {
 }
 
 variable "admin_cidr" {
-  description = "List of CIDR ranges allowed inbound SSH. No default — you must supply your own IP /32 (fail closed), e.g. [\"203.0.113.1/32\"]. Set in terraform.tfvars or via TF_VAR_admin_cidr."
+  description = "List of CIDR ranges allowed inbound SSH. No default — you must supply your own IP /32 (fail closed), e.g. [\"203.0.113.1/32\"]. Set in terraform.tfvars or export TF_VAR_admin_cidr='[\"203.0.113.1/32\"]'."
   type        = list(string)
 }
 

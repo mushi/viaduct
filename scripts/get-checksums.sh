@@ -24,7 +24,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TFVARS="${1:-${SCRIPT_DIR}/../terraform.tfvars}"
+AWS_TFVARS="${SCRIPT_DIR}/../aws/terraform.tfvars"
 DEFAULTS_FILE="${SCRIPT_DIR}/../variables.tf"
+AWS_DEFAULTS_FILE="${SCRIPT_DIR}/../aws/variables.tf"
 
 command -v jq >/dev/null || { echo "ERROR: jq is required" >&2; exit 1; }
 
@@ -48,36 +50,49 @@ api_digest() {
 }
 
 # ── Read a variable value from tfvars or variables.tf ────────────────────────
-# Uses awk instead of sed to avoid BSD/GNU sed incompatibilities.
+# Uses awk instead of sed to avoid BSD/GNU sed incompatibilities. Extraction
+# uses the POSIX two-arg match() (RSTART/RLENGTH) rather than gawk's three-arg
+# capture-array form — macOS ships BWK awk, which doesn't support the latter
+# and fails silently under the `2>/dev/null || true` below, which used to make
+# every lookup here fall through to hardcoded defaults on macOS.
 # Matches:   varname = "value"   (with any surrounding whitespace)
+#
+# Checked in order: TFVARS (the file passed on the command line, or root
+# terraform.tfvars by default), aws/terraform.tfvars, root variables.tf,
+# aws/variables.tf. AWS-only vars (awscli_version, k3s_*) live exclusively in
+# the aws/ root, so it's always searched regardless of which TFVARS is given.
 
 get_var() {
-  local name="$1" default="$2" val=""
+  local name="$1" default="$2" val="" f
 
-  # Try terraform.tfvars first
-  if [[ -f "$TFVARS" ]]; then
+  for f in "$TFVARS" "$AWS_TFVARS"; do
+    [[ -f "$f" ]] || continue
     val=$(awk -v key="$name" '
       $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
-        # Extract the value between the first pair of double-quotes on the line
-        match($0, /"([^"]+)"/, arr)
-        if (arr[1] != "") { print arr[1]; exit }
+        if (match($0, /"[^"]+"/)) {
+          v = substr($0, RSTART + 1, RLENGTH - 2)
+          if (v != "") { print v; exit }
+        }
       }
-    ' "$TFVARS" 2>/dev/null || true)
+    ' "$f" 2>/dev/null || true)
     [[ -n "$val" ]] && { echo "$val"; return; }
-  fi
+  done
 
   # Fall back to default = "..." in variables.tf
-  if [[ -f "$DEFAULTS_FILE" ]]; then
+  for f in "$DEFAULTS_FILE" "$AWS_DEFAULTS_FILE"; do
+    [[ -f "$f" ]] || continue
     val=$(awk -v key="$name" '
       /variable[[:space:]]+"/ && $0 ~ "\"" key "\"" { found=1 }
       found && /default[[:space:]]*=/ {
-        match($0, /"([^"]+)"/, arr)
-        if (arr[1] != "") { print arr[1]; exit }
+        if (match($0, /"[^"]+"/)) {
+          v = substr($0, RSTART + 1, RLENGTH - 2)
+          if (v != "") { print v; exit }
+        }
       }
       found && /^}/ { found=0 }
-    ' "$DEFAULTS_FILE" 2>/dev/null || true)
+    ' "$f" 2>/dev/null || true)
     [[ -n "$val" ]] && { echo "$val"; return; }
-  fi
+  done
 
   echo "$default"
 }
@@ -156,7 +171,7 @@ fi
 
 echo ""
 echo "══════════════════════════════════════════════════════════════"
-echo " Add these lines to your terraform.tfvars:"
+echo " Add these lines to your root terraform.tfvars:"
 echo "══════════════════════════════════════════════════════════════"
 echo ""
 echo "conduit_sha256       = \"$CONDUIT_SHA256\""
