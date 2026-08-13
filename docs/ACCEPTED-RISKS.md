@@ -38,9 +38,25 @@ WireGuard private key.
    the `spire` and `vault` system accounts, both `nologin`. Code execution as
    `vault` implies access to Vault's own storage; as `spire`, the SPIRE CA. The
    step from there to "can mint a Vault token" is not a meaningful escalation.
-3. **The blast radius is bounded.** The `admin` policy no longer grants
-   `sys/policies/acl/*` or `auth/gcp/role/*` write, so a holder cannot rebuild
-   arbitrary capability, and it can no longer read `kv/data/wireguard/hub`.
+3. **The blast radius is bounded, but not small.** The `admin` policy no longer
+   grants `sys/policies/acl/*` or `auth/gcp/role/*` write, so a holder cannot
+   rebuild arbitrary capability, and it can no longer read
+   `kv/data/wireguard/hub`. What it *does* still hold is worth stating plainly
+   rather than leaving to be discovered:
+
+   - create/read/update/delete on `kv/data/aws/*` and `kv/data/hetzner/*` — the
+     **Cloudflare DNS-edit token** and the **Grafana Cloud keys**. The Cloudflare
+     token can create records for the zone, which is a path to issuing
+     certificates for the domain.
+   - read/delete on `kv/data/wireguard/peers/*`, so a holder can drop a peer
+     registration (a spoke disconnects at the next reconcile) though not read the
+     hub key or forge a peer.
+
+   That is the standing capability of anything on the hub that can read the GCE
+   metadata identity JWT. It is accepted for the reasons above, not because it is
+   trivial. An independent re-verification at `a540f43` returned PARTIAL on
+   VULN-006 for exactly this: the escalation loop is closed, the class is not, and
+   this file is documented risk acceptance rather than a code control.
 4. **The alternatives cost more than the risk.** Delivering `role_id` and
    `secret_id` from a single origin (Terraform) collapses AppRole's two-factor
    split into one factor — an anti-pattern that trades a real property for a
