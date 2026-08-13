@@ -29,8 +29,15 @@ vh_wait_for_mesh_handshake() {
 
     while :; do
         # Map peer_ip -> public key via allowed-ips, then look up that peer's handshake.
+        #
+        # Match the allowed-ips entry EXACTLY, as a field. The previous form was
+        # `$0 ~ ip`: an unanchored regex over the whole line, which matched a peer
+        # holding 10.99.0.30/32 when asked about 10.99.0.3, treated the dots as
+        # wildcards, and returned whichever peer happened to come first. Everything
+        # that now leans on this gate for provenance — the federation bundle imports
+        # and the Vault cert fetch — would have leaned on the wrong peer.
         pubkey="$("$WG_BIN" show "$iface" allowed-ips 2>/dev/null \
-            | awk -v ip="$peer_ip" '$0 ~ ip { print $1; exit }')"
+            | awk -v ip="$peer_ip/32" '{ for (i = 2; i <= NF; i++) if ($i == ip) { print $1; exit } }')"
 
         if [ -n "$pubkey" ]; then
             hs="$("$WG_BIN" show "$iface" latest-handshakes 2>/dev/null \

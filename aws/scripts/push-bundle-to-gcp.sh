@@ -34,7 +34,7 @@ set -e
 # vh_wait_for_mesh_handshake, inline: wg-quick returning does not mean a peer has
 # authenticated. Without this the fetch can run across a mesh that authenticates nobody.
 deadline=\$(( SECONDS + 30 ))
-until pubkey=\$(wg show wg0 allowed-ips 2>/dev/null | awk -v ip="$AWS_MESH_HOST" '\$0 ~ ip { print \$1; exit }') \\
+until pubkey=\$(wg show wg0 allowed-ips 2>/dev/null | awk -v ip="$AWS_MESH_HOST/32" '{ for (i = 2; i <= NF; i++) if (\$i == ip) { print \$1; exit } }') \\
       && [ -n "\$pubkey" ] \\
       && hs=\$(wg show wg0 latest-handshakes 2>/dev/null | awk -v k="\$pubkey" '\$1 == k { print \$2; exit }') \\
       && [ -n "\$hs" ] && [ "\$hs" -gt 0 ] && [ \$(( \$(date +%s) - hs )) -lt 180 ]; do
