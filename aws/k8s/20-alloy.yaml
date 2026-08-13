@@ -140,12 +140,31 @@ spec:
       containers:
       - name: alloy
         image: grafana/alloy@sha256:ab04df3936e4d71d31b6f55e0c58a7e749091f59635dd8c2bc731ba1b6c93701 # v1.8.3
-        args: ["run", "/rendered/config.alloy", "--storage.path=/tmp/alloy", "--server.http.listen-addr=0.0.0.0:12345"]
+        # Loopback, not 0.0.0.0. Inside the pod netns 0.0.0.0 resolves to the pod IP,
+        # which any process in the NODE's netns can dial — and kube-router does not
+        # filter node-originated traffic to a local pod, so the NetworkPolicy below
+        # never covered that path. On loopback the admin API is reachable only from
+        # inside this pod. `kubectl port-forward` still works: it enters the pod netns.
+        #
+        # pprof off as well. /debug/pprof/heap dumps process memory, and the rendered
+        # config carries the Grafana Cloud basic_auth password in plaintext, so a heap
+        # dump is a credential disclosure. It defaults to true.
+        args:
+        - "run"
+        - "/rendered/config.alloy"
+        - "--storage.path=/tmp/alloy"
+        - "--server.http.listen-addr=127.0.0.1:12345"
+        - "--server.http.enable-pprof=false"
         resources:
           requests: { memory: 96Mi, cpu: 100m }
           limits: { memory: 256Mi, cpu: 500m }
+        # A tcpSocket probe dials the POD IP, which is exactly the reachability being
+        # removed above, so the check has to run inside the pod instead. bash's
+        # /dev/tcp opens the connection without needing an HTTP client — the image has
+        # /usr/bin/bash but ships neither curl nor wget.
         livenessProbe:
-          tcpSocket: { port: 12345 }
+          exec:
+            command: ["/usr/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/12345"]
           initialDelaySeconds: 30
           periodSeconds: 30
         securityContext:
@@ -171,14 +190,13 @@ spec:
 # on the cluster network could. Alloy is outbound-only in normal operation: it scrapes
 # conduit-metrics:9090 and remote-writes to Grafana.
 #
-# The listener stays on 0.0.0.0 deliberately. The liveness probe is a tcpSocket probe and
-# the kubelet dials the POD IP, not loopback, so moving the listener to 127.0.0.1 would
-# fail the probe and restart-loop the pod.
+# The listener is now on 127.0.0.1 (see the container args), so this policy is no longer
+# the only thing standing between the cluster and the admin API — it is defence in depth
+# for the namespace generally, and it is what confines conduit's metrics port.
 #
-# NOTE for operators: whether kubelet health probes are subject to NetworkPolicy is
-# CNI-dependent. If your CNI applies policy to node-originated traffic, the probe needs an
-# explicit allow for the node CIDR — add an ipBlock rule below. Verify the pod stays Ready
-# after applying this.
+# The probe no longer depends on this policy either: it runs inside the pod via
+# bash /dev/tcp rather than being dialled by the kubelet, so the CNI's treatment of
+# node-originated traffic no longer affects whether the pod stays Ready.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: { name: default-deny-ingress, namespace: viaduct }
