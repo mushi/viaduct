@@ -165,10 +165,45 @@ echo "alloy_zip_sha256     = \"$ALLOY_ZIP_SHA256\""
 echo "xray_exporter_sha256 = \"$XRAY_EXPORTER_SHA256\""
 echo "geoip_sha256         = \"$GEOIP_SHA256\""
 echo "geosite_sha256       = \"$GEOSITE_SHA256\""
+echo "geoip_version        = \"$GEOIP_VERSION\""
+echo "geosite_version      = \"$GEOSITE_VERSION\""
 echo ""
 echo " …and these to aws/terraform.tfvars:"
 echo ""
 echo "k3s_installer_sha256 = \"$K3S_INSTALLER_SHA256\""
 echo "awscli_zip_sha256    = \"$AWSCLI_ZIP_SHA256\""
+echo "awscli_version       = \"$AWSCLI_VERSION\""
 echo ""
-echo "══════════════════════════════════════════════════════════════"
+
+# ── Is anything newer upstream? ───────────────────────────────────────────────
+# The digests above are computed against the versions CURRENTLY pinned, which is
+# what you want for a re-verify. But three of these track a moving upstream, and
+# without this you would have no way to learn a new tag exists — you would keep
+# re-printing the digest of the version you already have.
+latest_tag() { curl -fsSL -H "Accept: application/vnd.github+json" \
+  "https://api.github.com/repos/$1/releases/latest" 2>/dev/null | jq -r '.tag_name // empty'; }
+
+NEW_GEOIP="$(latest_tag v2fly/geoip || true)"
+NEW_GEOSITE="$(latest_tag v2fly/domain-list-community || true)"
+NEW_AWSCLI="$(curl -fsSL -H "Accept: application/vnd.github+json" \
+  "https://api.github.com/repos/aws/aws-cli/tags" 2>/dev/null \
+  | jq -r '[.[].name | select(startswith("2."))][0] // empty' || true)"
+
+newer=""
+[ -n "$NEW_GEOIP" ]   && [ "$NEW_GEOIP"   != "$GEOIP_VERSION" ]   && newer="$newer\n  geoip_version   $GEOIP_VERSION -> $NEW_GEOIP"
+[ -n "$NEW_GEOSITE" ] && [ "$NEW_GEOSITE" != "$GEOSITE_VERSION" ] && newer="$newer\n  geosite_version $GEOSITE_VERSION -> $NEW_GEOSITE"
+[ -n "$NEW_AWSCLI" ]  && [ "$NEW_AWSCLI"  != "$AWSCLI_VERSION" ]  && newer="$newer\n  awscli_version  $AWSCLI_VERSION -> $NEW_AWSCLI"
+
+if [ -n "$newer" ]; then
+  echo "══════════════════════════════════════════════════════════════"
+  echo " Newer upstream releases exist:"
+  printf "$newer\n"
+  echo ""
+  echo " To move: set the version above in tfvars, re-run this script, then paste"
+  echo " the regenerated digest alongside it."
+  echo "══════════════════════════════════════════════════════════════"
+  echo ""
+fi
+
+# The k3s installer has no version of its own — get.k3s.io is edited in place, so the
+# digest changing IS the only signal. Re-run this script to pick up the new one.

@@ -19,6 +19,13 @@ Rebuild explicitly:
 | Hetzner data plane | `terraform apply -replace=hcloud_server.conduit` (repo root) |
 | AWS node | `cd aws && terraform apply -replace=aws_instance.spire` |
 
+Two rebuilds need one command first, or they stop:
+
+| Rebuilding | Run first | Why |
+|---|---|---|
+| Hetzner | `export VIADUCT_HOST_KEY_RESET=1` | The host-key pin is kept between runs; a new node presents a new key and provisioning fail-closes |
+| A spoke that will present a **new** WireGuard key | `vault kv delete kv/wireguard/peers/<name>` | Re-registering a name with a different key is refused. Unchanged-key re-applies need nothing |
+
 A GCP rebuild needs no follow-up on the spokes: each fetches GCP Vault's (rotated) cert
 fresh over the mesh when it next needs it (Hetzner at boot, AWS at Alloy pod start), so a
 cert rotation self-heals. GCP's SPIRE CA is stable across a rebuild (restored from the Vault
@@ -28,6 +35,21 @@ In-place changes apply normally: add/remove VLESS users or rotate Grafana creds 
 repo-root `terraform apply` (re-runs `scripts/provision.sh`, a few-second service blip, no
 rebuild); a GCP change needing an instance stop (`machine_type`, shielded config) adds
 `-var 'allow_stopping_for_update=true'`.
+
+## When an apply or boot stops
+
+Everything below is deliberate fail-closed behaviour. Match the message, run the fix.
+
+| Message mentions | Fix |
+|---|---|
+| host key mismatch / `StrictHostKeyChecking` | `export VIADUCT_HOST_KEY_RESET=1` and re-apply (only for a rebuild you intended) |
+| `already registered with a different public key` | `vault kv delete kv/wireguard/peers/<name>`, re-apply |
+| `already registered to peer` | That mesh IP belongs to another peer. Free it, or pick another address |
+| `does not contain a UUID` | Delete the named file under `backups/clients/`; a fresh UUID is minted (the old client credential is revoked) |
+| `refusing to render`, `prometheus_url`/`api_key`/`cf_api_token` | A Vault value is malformed — usually a trailing newline. Re-enter it: `vault kv put kv/hetzner/grafana …` |
+| `could not determine a valid IPv4` | The node's public-IP lookup failed. Retry; if it persists, check egress from the node |
+| digest mismatch on k3s / aws-cli / geoip / geosite | Upstream moved. Refresh the pins — see [Routine maintenance](#routine-maintenance) |
+| Vault denies a `policy write` / `auth enable` | The standing `admin` login cannot provision. `vault operator generate-root` with your recovery keys |
 
 ## Prerequisites
 
@@ -198,6 +220,53 @@ Gives you Vault, SPIRE, and Hetzner admin over `wg0` instead of public paths.
     --command 'sudo cat /opt/vault/tls/vault.crt' > ~/vault.crt
   curl --cacert ~/vault.crt https://10.99.0.1:8200/v1/sys/health   # sealed:false, initialized:true
   ```
+
+## Routine maintenance
+
+**Pins.** Seven values pin what the nodes download. A boot fails closed on a mismatch —
+that is the point. Refresh them, read the diff, commit:
+
+```sh
+./scripts/get-checksums.sh   # prints every pin ready to paste, and flags newer upstream releases
+```
+
+`conduit_sha256`, `xray_zip_sha256`, `alloy_zip_sha256`, `xray_exporter_sha256`,
+`geoip_sha256`, `geosite_sha256` (+ `geoip_version`, `geosite_version`) go in the repo-root
+`terraform.tfvars`; `k3s_installer_sha256`, `awscli_zip_sha256` (+ `awscli_version`) go in
+`aws/terraform.tfvars`. The **k3s installer pin moves on upstream's editing schedule, not on
+k3s releases**, so expect it to need refreshing more often than the version.
+
+**Vault audit log.** `/var/log/vault/audit.log` on the control plane, rotated daily/64 MB,
+14 kept. It shares the 30 GB boot disk.
+
+## Alerts to configure
+
+Three conditions keep the system running rather than failing, so nothing surfaces them:
+
+| Signal | Meaning |
+|---|---|
+| `aws_egress_state_persisted == 0` | The guardrail cannot write state, so **the egress cap is not being enforced** |
+| `aws_egress_throttled == 1` sustained | Something is spending the egress budget; the AWS node is shaped and still serving |
+| Vault file audit device erroring | Vault keeps serving via syslog, but the forensic log is being lost |
+
+## Day-to-day on the Hetzner node
+
+The `ops` account is inspect-only. It has exactly two privileged commands:
+
+```sh
+sudo ops-journal <unit> [follow]   # conduit xray xray-probe-client xray-exporter
+                                   # xray-user-stats probe alloy hetzner-secrets nginx ssh wg-quick@wg0
+sudo ops-wg-status                 # mesh status; never exposes the private key
+```
+
+Anything else needs the `deploy` account. Adding a unit means extending the wrapper in
+`cloud-init.yaml.tpl`.
+
+Alloy's UI on AWS is bound to the pod's loopback. Reach it with:
+
+```sh
+sudo k3s kubectl -n viaduct port-forward deploy/alloy 12345:12345   # then http://127.0.0.1:12345
+```
 
 ## Recovery
 
