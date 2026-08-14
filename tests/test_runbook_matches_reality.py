@@ -35,7 +35,7 @@ class RunbookTest(unittest.TestCase):
     def test_it_was_read(self):
         """Anchor: an empty file would satisfy every assertNotIn below."""
         self.assertGreater(len(self.text), 5000)
-        for heading in ("## When an apply or boot stops", "## Routine maintenance",
+        for heading in ("## If an apply or boot stops", "## Routine maintenance",
                         "## Alerts to configure", "## Day-to-day on the Hetzner node"):
             self.assertIn(heading, self.text, f"{heading} is missing")
 
@@ -109,7 +109,7 @@ class RunbookTest(unittest.TestCase):
         for phrase in ("already registered with a different public key",
                        "already registered to peer",
                        "does not contain a UUID",
-                       "could not determine a valid IPv4"):
+                       "could not determine a public IPv4"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, self.text, f"{phrase!r} left the runbook")
                 self.assertIn(phrase, sources,

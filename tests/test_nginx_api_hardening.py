@@ -68,11 +68,15 @@ class ApiLimitsTest(unittest.TestCase):
                       "no per-client request-rate limit on the unauthenticated /api location")
 
     def test_finite_client_timeouts(self):
+        # These are server-scope directives — nginx forbids them inside a location (doing so
+        # makes `nginx -t` fail and nginx never starts), so they live in the server block and
+        # cover the /api listener from there. Assert present and finite.
+        conf = nginx_conf()
         for directive in ("client_header_timeout", "client_body_timeout"):
-            self.assertIn(
-                directive, self.loc,
-                f"no {directive}: a slow-header or slow-body client can pin a worker",
-            )
+            m = re.search(rf"^\s*{directive}\s+(\S+?);", conf, re.M)
+            self.assertIsNotNone(
+                m, f"no {directive}: a slow-header or slow-body client can pin a worker")
+            self.assertNotEqual(m.group(1), "0", f"{directive} is 0 (infinite)")
 
     def test_long_poll_upstream_timeout_is_retained_deliberately(self):
         """XHTTP is a long-poll transport; cutting this would break legitimate sessions."""

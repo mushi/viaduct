@@ -11,27 +11,72 @@
 
 # ── Host-key pinning ─────────────────────────────────────────────────────────
 
-# vh_reset_host_key_pin_if_requested <host> <known_hosts_file>
+# vh_server_was_rebuilt <server_id> <serverid_file>
 #
-# Remove a recorded host key ONLY when the operator has explicitly signalled a
-# rebuild via VIADUCT_HOST_KEY_RESET=1.
+# True (0) iff an id was recorded on a previous run and differs from the current
+# one — i.e. the instance was recreated since the last successful provision. False
+# when no id is recorded yet (first run / adoption) or the ids match. The id is
+# minted by the cloud provider and read from terraform state, so it is a rebuild
+# signal an on-path attacker cannot forge. Drives both the host-key-pin reset and
+# the WireGuard peer-key rotation, so a genuine rebuild self-heals with no flag.
+vh_server_was_rebuilt() {
+    local server_id="${1:-}" serverid_file="${2:-}" recorded
+    [ -n "$server_id" ] && [ -n "$serverid_file" ] && [ -f "$serverid_file" ] || return 1
+    recorded="$(cat "$serverid_file" 2>/dev/null || true)"
+    [ -n "$recorded" ] && [ "$recorded" != "$server_id" ]
+}
+
+# vh_reset_host_key_pin_if_requested <host> <known_hosts_file> [server_id] [serverid_file]
 #
-# A `terraform -replace` regenerates the box's SSH host keys while keeping the
-# static IP, so the stale pin genuinely has to go — but that is a deliberate,
-# infrequent act. Clearing the pin on every apply meant the following SSH
-# (StrictHostKeyChecking=accept-new) re-trusted whatever key answered, which is
-# exactly the check that would otherwise catch an on-path attacker.
+# Remove a recorded host key ONLY when the box was genuinely rebuilt — never on
+# an ordinary apply. A `terraform -replace` regenerates the box's SSH host keys
+# while keeping the static IP, so the stale pin has to go; but clearing it on
+# every apply would let the following SSH (StrictHostKeyChecking=accept-new)
+# re-trust whatever key answered, which is exactly the check that catches an
+# on-path attacker.
 #
-# When no reset is requested and the key really did change, the SSH below fails
-# with a host-key error and provision.sh prints the exact command to run.
+# Two ways the reset is authorised, in order:
+#
+#   1. VIADUCT_HOST_KEY_RESET=1 — explicit operator override. The escape hatch for
+#      the one case auto-detection deliberately will NOT act on: an out-of-band
+#      key change on the same server (e.g. an OS reinstall that keeps the hcloud
+#      server id). A genuinely changed key with no new id must stay operator-gated.
+#
+#   2. The hcloud server id changed since the pin was recorded. The id is minted
+#      by hcloud and read into terraform state; it changes only when the instance
+#      is recreated, which is also the only thing that regenerates the host keys.
+#      An attacker MITM-ing the SSH to the static IP cannot forge a new id (that
+#      needs hcloud-account compromise, a strictly higher bar), so clearing the
+#      stale pin here is safe. A key change NOT backed by a new id (the MITM case:
+#      same id, unexpected key) is left pinned and fails closed on the next SSH.
+#
+# When neither holds and the key really did change, the SSH in provision.sh fails
+# with a host-key error and prints the exact command to run.
 vh_reset_host_key_pin_if_requested() {
-    local host="$1" known_hosts="$2"
+    local host="$1" known_hosts="$2" server_id="${3:-}" serverid_file="${4:-}"
 
     if [ "${VIADUCT_HOST_KEY_RESET:-0}" = "1" ]; then
         ssh-keygen -R "$host" -f "$known_hosts" >/dev/null 2>&1 || true
         return 0
     fi
+
+    if vh_server_was_rebuilt "$server_id" "$serverid_file"; then
+        ssh-keygen -R "$host" -f "$known_hosts" >/dev/null 2>&1 || true
+        return 0
+    fi
     return 0
+}
+
+# vh_record_server_id <server_id> <serverid_file>
+#
+# Persist the hcloud server id the current host-key pin belongs to, so the next
+# run can tell a genuine rebuild (id changed) from an ordinary apply (id
+# unchanged). Call only after SSH to the box has succeeded. A no-op if either
+# argument is empty, so an apply with no id available simply keeps the old record.
+vh_record_server_id() {
+    local server_id="${1:-}" serverid_file="${2:-}"
+    [ -n "$server_id" ] && [ -n "$serverid_file" ] || return 0
+    printf '%s\n' "$server_id" > "$serverid_file"
 }
 
 # ── Input allowlists ─────────────────────────────────────────────────────────
@@ -39,15 +84,16 @@ vh_reset_host_key_pin_if_requested() {
 # vh_is_wg_key <value>
 #
 # A WireGuard public key or preshared key is the base64 encoding of exactly 32
-# bytes: 43 characters from the base64 alphabet followed by '='. The final
-# pre-padding character encodes only two significant bits, so it is restricted
-# to [AEIMQUYcgkosw4].
+# bytes: 43 characters from the base64 alphabet followed by '='. The 43rd
+# character carries the key's last 4 significant bits plus 2 zero padding bits, so
+# its base64 value is a multiple of 4 — the class [AEIMQUYcgkosw048]. (An earlier
+# form omitted '0' and '8', which rejected 1 in 8 otherwise-valid keys at random.)
 #
 # Admitting only this shape leaves no character that a shell could treat as a
 # metacharacter, and no newline that could inject a directive into a rendered
 # wg0.conf.
 vh_is_wg_key() {
-    [[ "${1:-}" =~ ^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw4]=$ ]]
+    [[ "${1:-}" =~ ^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$ ]]
 }
 
 # vh_is_mesh_ip <value>

@@ -508,9 +508,10 @@ cat > /usr/local/bin/lib/wg-validate.sh <<'WGVAL'
 #!/usr/bin/env bash
 # Sourced by wg-sync-peers.sh and wg-register-peer.sh. See scripts/lib/provision-guards.sh.
 
-# base64 of exactly 32 bytes: 43 chars then '='. The final pre-padding character
-# encodes two significant bits, hence the restricted set.
-vh_is_wg_key()  { [[ "${1:-}" =~ ^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw4]=$ ]]; }
+# base64 of exactly 32 bytes: 43 chars then '='. The 43rd char carries 4 significant
+# bits + 2 zero padding bits, so its value is a multiple of 4: [AEIMQUYcgkosw048].
+# (Omitting '0'/'8' rejected 1 in 8 valid keys — e.g. a pubkey ending '...6S0='.)
+vh_is_wg_key()  { [[ "${1:-}" =~ ^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$ ]]; }
 
 # Any host address in the mesh /24, excluding network and broadcast.
 vh_is_mesh_ip() { [[ "${1:-}" =~ ^10\.99\.0\.([1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$ ]]; }
@@ -642,6 +643,40 @@ unset VAULT_TOKEN
 printf 'hub_public_key %s\npsk %s\n' "$hub_pub" "$psk"
 REG
 chmod 0755 /usr/local/bin/wg-register-peer.sh
+
+# Deregister a spoke: clear its mesh registry entry so a genuinely rebuilt spoke
+# can register a fresh key + PSK. Called by a spoke's provisioner over IAP ONLY
+# after it has detected a real rebuild (the cloud instance id changed) — the hub
+# cannot verify that itself, so deletion stays an authorised act the operator's
+# trusted provisioner drives, exactly as the manual `vault kv delete` did. Scoped
+# to the wireguard-hub role (peer registry only), not admin. Idempotent: a no-op
+# when the peer is absent (a first deploy). It does NOT sync the running hub, so
+# the old peer keeps working until the follow-up register replaces it — a failed
+# re-register never strands the mesh.
+cat > /usr/local/bin/wg-deregister-peer.sh <<'DEREG'
+#!/usr/bin/env bash
+set -euo pipefail
+name="${1:?peer name required}"
+case "$name" in *[!a-z0-9-]*) echo "invalid peer name: $name" >&2; exit 1 ;; esac
+export VAULT_ADDR="https://127.0.0.1:8200" VAULT_CACERT="/opt/vault/tls/vault.crt"
+VAULT_TOKEN="$(vault login -method=gcp -token-only role=wireguard-hub type=gce)"; export VAULT_TOKEN
+# Deleting a non-existent key is a success here (the goal is "entry absent", and a first
+# deploy has none). Only a real failure — above all a permission denial — must surface, so
+# the caller's fallback message shows instead of a silent "success" that deletes nothing.
+if ! err="$(vault kv delete "kv/wireguard/peers/$name" 2>&1)"; then
+  if printf '%s' "$err" | grep -qiE 'permission denied|403'; then
+    echo "ERROR: denied delete on kv/wireguard/peers/$name — the wireguard-hub policy has no" >&2
+    echo "  'delete' on peers. On a snapshot-restored hub that grant predates the restore, so" >&2
+    echo "  re-run bootstrap-vault.sh (fresh root token), or clear it by hand as admin:" >&2
+    echo "    vault kv delete kv/wireguard/peers/$name" >&2
+    unset VAULT_TOKEN
+    exit 1
+  fi
+fi
+unset VAULT_TOKEN
+echo "deregistered peer '$name'"
+DEREG
+chmod 0755 /usr/local/bin/wg-deregister-peer.sh
 
 # Fetch (or first-time generate) the hub key from Vault. Vault is local and, by
 # this point in startup, unsealed (§6a restores it on a rebuild; a plain reboot

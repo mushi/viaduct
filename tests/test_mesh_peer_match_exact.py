@@ -119,6 +119,21 @@ class PeerMatchTest(unittest.TestCase):
         self.assertFalse(p.gate_passed,
                          "the address was treated as a regex, so unrelated peers match")
 
+    def test_a_spoke_hub_route_slash24_is_matched(self):
+        """Regression: on a spoke the hub peer carries the whole mesh as 10.99.0.0/24,
+        so asking for the hub 10.99.0.1 must find it by prefix containment. Exact /32
+        matching missed it and the Vault/bundle fetch failed closed on a healthy tunnel."""
+        p = run_gate([(HUB_KEY, "10.99.0.0/24")], {HUB_KEY: 10}, peer_ip=HUB)
+        self.assertTrue(
+            p.gate_passed,
+            "the hub peer's /24 mesh route did not satisfy the gate for the hub IP")
+
+    def test_a_noncovering_slash24_does_not_match(self):
+        """Containment is real: a /24 that does not contain the target must not match."""
+        p = run_gate([(DECOY_KEY, "10.99.1.0/24")], {DECOY_KEY: 10}, peer_ip=HUB)
+        self.assertFalse(
+            p.gate_passed, "a /24 that does not contain the target satisfied the gate")
+
     def test_a_peer_with_several_addresses_is_still_found(self):
         """allowed-ips carries multiple entries; the match scans them all."""
         p = run_gate([(GOOD_KEY, f"{HUB}/32 {TARGET}/32")], {GOOD_KEY: 10})

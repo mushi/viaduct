@@ -18,6 +18,39 @@
 # Allow tests (and hosts with wg elsewhere on PATH) to inject the binary.
 : "${WG_BIN:=wg}"
 
+# _vh_ip2int <dotted-ipv4> -> prints the 32-bit integer, or returns non-zero if the
+# input is not a well-formed IPv4 (exactly four octets, each 0-255). Validating here is
+# what keeps a garbage allowed-ips field (e.g. a regex-looking "10299203") from being
+# mistaken for an address.
+_vh_ip2int() {
+    local a b c d rest o
+    IFS=. read -r a b c d rest <<EOF
+$1
+EOF
+    [ -n "$d" ] && [ -z "$rest" ] || return 1
+    for o in "$a" "$b" "$c" "$d"; do
+        case "$o" in ''|*[!0-9]*) return 1 ;; esac
+        [ "$o" -le 255 ] || return 1
+    done
+    printf '%u\n' "$(( (a << 24) | (b << 16) | (c << 8) | d ))"
+}
+
+# _vh_cidr_contains <ip> <cidr> -> 0 if <ip> falls inside <cidr> (a bare IP is /32).
+# Proper prefix containment, not a string match: 10.99.0.1 IS in 10.99.0.0/24, and
+# 10.99.0.3 is NOT in 10.99.0.30/32.
+_vh_cidr_contains() {
+    local ip="$1" cidr="$2" net prefix ipi neti mask
+    net="${cidr%/*}"; prefix="${cidr#*/}"
+    [ "$net" = "$cidr" ] && prefix=32
+    case "$prefix" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$prefix" -le 32 ] || return 1
+    ipi="$(_vh_ip2int "$ip")"  || return 1
+    neti="$(_vh_ip2int "$net")" || return 1
+    [ "$prefix" -eq 0 ] && return 0
+    mask=$(( (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF ))
+    [ "$(( ipi & mask ))" -eq "$(( neti & mask ))" ]
+}
+
 # vh_wait_for_mesh_handshake <peer_ip> [iface] [timeout_seconds]
 #
 # Block until the peer whose allowed-ips cover <peer_ip> has a handshake newer than
@@ -25,19 +58,24 @@
 vh_wait_for_mesh_handshake() {
     local peer_ip="$1" iface="${2:-wg0}" timeout="${3:-60}"
     local deadline=$(( SECONDS + timeout ))
-    local pubkey now hs
+    local pubkey now hs pk rest c
 
     while :; do
-        # Map peer_ip -> public key via allowed-ips, then look up that peer's handshake.
+        # Map peer_ip -> public key by prefix CONTAINMENT over each peer's allowed-ips.
         #
-        # Match the allowed-ips entry EXACTLY, as a field. The previous form was
-        # `$0 ~ ip`: an unanchored regex over the whole line, which matched a peer
-        # holding 10.99.0.30/32 when asked about 10.99.0.3, treated the dots as
-        # wildcards, and returned whichever peer happened to come first. Everything
-        # that now leans on this gate for provenance — the federation bundle imports
-        # and the Vault cert fetch — would have leaned on the wrong peer.
-        pubkey="$("$WG_BIN" show "$iface" allowed-ips 2>/dev/null \
-            | awk -v ip="$peer_ip/32" '{ for (i = 2; i <= NF; i++) if ($i == ip) { print $1; exit } }')"
+        # Containment, not string equality: on a spoke the hub peer carries the whole
+        # mesh as 10.99.0.0/24, so an exact "10.99.0.1/32" field match never found it
+        # and the gate failed on a healthy tunnel. Containment still rejects the
+        # original defect — 10.99.0.3 is not inside 10.99.0.30/32 — on which the
+        # provenance of the federation bundle imports and the Vault cert fetch rests.
+        pubkey=""
+        while read -r pk rest; do
+            [ -n "$pk" ] || continue
+            for c in $rest; do
+                if _vh_cidr_contains "$peer_ip" "$c"; then pubkey="$pk"; break; fi
+            done
+            [ -n "$pubkey" ] && break
+        done < <("$WG_BIN" show "$iface" allowed-ips 2>/dev/null)
 
         if [ -n "$pubkey" ]; then
             hs="$("$WG_BIN" show "$iface" latest-handshakes 2>/dev/null \

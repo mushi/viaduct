@@ -164,17 +164,21 @@ class LibraryDeploymentTest(unittest.TestCase):
 
 
 class FetchScriptWiringTest(unittest.TestCase):
-    def test_fetch_waits_for_handshake_and_verifies_before_use(self):
+    def test_fetch_verifies_cert_and_defers_the_handshake_gate_to_root(self):
+        """The captured cert is verified against the hub IP here. The handshake precondition
+        is enforced UPSTREAM by the service's root ExecStartPre (see
+        test_hetzner_secrets_self_heal): `wg show` needs CAP_NET_ADMIN that this unprivileged
+        (viaduct-secrets) fetch lacks, so the gate must not live in this script."""
         lines = FETCH.read_text().splitlines()
+        self.assertNotIn(
+            "vh_wait_for_mesh_handshake", uncommented(lines),
+            "the handshake gate is back in the unprivileged fetch, where `wg show` returns "
+            "nothing (no CAP_NET_ADMIN) so the secrets never render")
         try:
             capture = next(i for i, l in enumerate(lines) if "openssl s_client" in l)
         except StopIteration:
             self.fail("could not locate the openssl s_client capture in fetch-hetzner-secrets.sh")
-        before = uncommented(lines[:capture])
-        after_block = uncommented(lines[capture:])
-        self.assertIn("vh_wait_for_mesh_handshake", before,
-                      "the cert is captured before any handshake precondition is enforced")
-        self.assertIn("vh_verify_cert_san", after_block,
+        self.assertIn("vh_verify_cert_san", uncommented(lines[capture:]),
                       "the captured cert is never verified against the expected hub IP")
 
 

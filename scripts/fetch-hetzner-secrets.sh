@@ -36,10 +36,10 @@ done
 # 2. GCP Vault's CURRENT listener cert, fetched over the mesh. WireGuard authenticates
 #    that ${HUB_MESH_IP} is the GCP hub, so this trust-on-first-use is sound and always
 #    reflects the current cert (which rotates on a GCP rebuild) — but only once a peer
-#    handshake has actually happened. systemd's After=wg-quick@wg0.service does not
-#    guarantee that, so wait for it explicitly, then fail closed on a certificate that
-#    cannot be the hub's.
-vh_wait_for_mesh_handshake "$HUB_MESH_IP" wg0 60 || exit 1
+#    handshake has actually happened. That precondition is enforced by the service's ROOT
+#    ExecStartPre: the handshake check reads `wg show`, which needs CAP_NET_ADMIN that this
+#    unprivileged (viaduct-secrets) fetch does not have. So by here the mesh is already
+#    authenticated; fail closed only on a certificate that cannot be the hub's.
 openssl s_client -connect "${HUB_MESH_IP}:8200" </dev/null 2>/dev/null | openssl x509 > "$CACERT"
 vh_verify_cert_san "$CACERT" "$HUB_MESH_IP" || exit 1
 

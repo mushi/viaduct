@@ -106,6 +106,11 @@ locals {
   spire_server_ip = var.enable_spire ? data.terraform_remote_state.gcp[0].outputs.instance_external_ip : ""
   spire_instance  = var.enable_spire ? data.terraform_remote_state.gcp[0].outputs.instance_name : ""
   spire_zone      = var.enable_spire ? data.terraform_remote_state.gcp[0].outputs.zone : ""
+
+  # Scripts embedded (base64) in cloud-init are stripped of full-line comments at render
+  # time (the shebang is kept) so the gzip+base64 user_data stays under Hetzner's 32 KiB
+  # cap. The repo copies keep their full comments; only the deployed copy is lean.
+  strip_comments = "/(?m)^[[:blank:]]*#([^!].*)?$/"
 }
 
 # ── cloud-init (gzip-compressed) ──────────────────────────────────────────────
@@ -134,8 +139,8 @@ data "cloudinit_config" "conduit" {
       geosite_sha256        = var.geosite_sha256
       vless_sni             = var.vless_sni
       vless_domain          = var.vless_domain
-      fetch_secrets_script  = file("${path.module}/scripts/fetch-hetzner-secrets.sh")
-      mesh_trust_lib        = file("${path.module}/scripts/lib/mesh-trust.sh")
+      fetch_secrets_script  = replace(file("${path.module}/scripts/fetch-hetzner-secrets.sh"), local.strip_comments, "")
+      mesh_trust_lib        = replace(file("${path.module}/scripts/lib/mesh-trust.sh"), local.strip_comments, "")
       xray_exporter_version = var.xray_exporter_version
       xray_exporter_sha256  = var.xray_exporter_sha256
       alloy_version         = var.alloy_version
@@ -232,7 +237,10 @@ resource "terraform_data" "provision" {
     command     = "${path.module}/scripts/provision.sh"
     interpreter = ["/usr/bin/env", "bash"]
     environment = {
+      # SERVER_ID changes only on a recreate; provision.sh uses it to auto-clear
+      # the stale SSH host-key pin after a rebuild (no manual flag needed).
       SERVER_IP    = hcloud_server.conduit.ipv4_address
+      SERVER_ID    = hcloud_server.conduit.id
       SSH_KEY_PATH = var.ssh_private_key_path
       BACKUPS_DIR  = "${path.module}/backups"
       USERS_FILE   = local_file.users_txt.filename

@@ -107,14 +107,26 @@ download() {
 
 # A `terraform -replace` rebuild keeps the static IP but regenerates the SSH
 # host keys, so the stale pin has to go before the SSH below can accept-new the
-# fresh one. That is a deliberate, infrequent act: dropping the pin on *every*
-# apply meant accept-new re-trusted whatever key answered for SERVER_IP, which
-# is precisely the check that catches an on-path attacker.
+# fresh one. A rebuild is detected automatically: SERVER_ID (the hcloud server
+# id) changes only on a recreate, and the guard clears the pin when it differs
+# from the id recorded next to known_hosts. A key change NOT backed by a new id
+# (the on-path-attacker case) is left pinned and fails closed in Phase A below.
 #
-# Set VIADUCT_HOST_KEY_RESET=1 when you are knowingly rebuilding. Otherwise the
-# pin is kept, and a genuinely changed key surfaces as the host-key failure
-# handled in Phase A below — which prints the exact command to clear it.
-vh_reset_host_key_pin_if_requested "${SERVER_IP}" "${BACKUPS_DIR}/known_hosts"
+# VIADUCT_HOST_KEY_RESET=1 forces the reset — the escape hatch for an out-of-band
+# key change that kept the same server id (e.g. an OS reinstall).
+# Detect a re-keyed box once, before the id is re-recorded after Phase A: either the
+# hcloud server id changed (a genuine -replace) or the operator forced it. The same
+# signal clears the host-key pin (next) AND rotates this spoke's WireGuard registry
+# key (§8b), so a rebuild self-heals with no manual step.
+if [ "${VIADUCT_HOST_KEY_RESET:-0}" = "1" ] || \
+   vh_server_was_rebuilt "${SERVER_ID:-}" "${BACKUPS_DIR}/known_hosts.serverid"; then
+  REBUILT=1
+else
+  REBUILT=0
+fi
+
+vh_reset_host_key_pin_if_requested "${SERVER_IP}" "${BACKUPS_DIR}/known_hosts" \
+  "${SERVER_ID:-}" "${BACKUPS_DIR}/known_hosts.serverid"
 
 # ── Phase A: wait for SSH to succeed (bounded ~10 min); establishes the master.
 log "Waiting for ${SERVER_IP} to accept SSH (up to 10 min)..."
@@ -126,8 +138,9 @@ until ssh_err=$($SSH -- true 2>&1); do
   if echo "$ssh_err" | grep -qiE 'host key|identification has changed|permission denied|authenticat'; then
     log "ERROR: SSH to ${SERVER_IP} failed for a non-transient reason — not a boot delay:"
     printf '%s\n' "$ssh_err" | sed 's/^/  | /'
-    log "  If the host key changed on a rebuild, clear it and re-apply:"
-    log "    ssh-keygen -R ${SERVER_IP} -f ${BACKUPS_DIR}/known_hosts"
+    log "  A rebuild is auto-detected from the hcloud server id; this key changed"
+    log "  WITHOUT a new id. If that was an intended out-of-band change, re-apply with"
+    log "  VIADUCT_HOST_KEY_RESET=1 (or clear the pin: ssh-keygen -R ${SERVER_IP} -f ${BACKUPS_DIR}/known_hosts)."
     exit 1
   fi
   if (( SECONDS >= BOOT_DEADLINE )); then
@@ -139,6 +152,10 @@ until ssh_err=$($SSH -- true 2>&1); do
   sleep 10
 done
 log "SSH established."
+# The server-id record is written at the very END of this script, not here: it is the
+# baseline that detects the NEXT rebuild, and it must not advance until provisioning
+# (including the WireGuard registration in §8b) has fully succeeded — otherwise a failure
+# after this point would burn the REBUILT signal and a retry would skip the auto-rotation.
 
 # ── Phase B: wait for cloud-init to finish (fast iterations; the master is up).
 log "Waiting for cloud-init to finish (up to 10 min)..."
@@ -282,6 +299,17 @@ if [[ -n "${GCP_SERVER_IP:-}" ]]; then
   vh_require vh_is_wg_key  "Hetzner wg0.pub (HZ_PUB)" "$HZ_PUB"   || exit 1
   vh_require vh_is_mesh_ip "mesh IP (WG_MESH_IP)"     "$WG_MESH_IP" || exit 1
 
+  # On a genuine rebuild the box generated a fresh WireGuard key, so the registry
+  # still holds the old one and the hub refuses a re-register. Clear the stale entry
+  # first — authorised by the rebuild signal (an id change only the operator's
+  # -replace produces), so a routine re-provision (same key) never rotates the PSK.
+  # Tolerant: an un-updated hub without the script just falls back to the refusal.
+  if [ "${REBUILT}" = "1" ]; then
+    log "WireGuard: rebuild detected — rotating this spoke's mesh registry key."
+    gcp_ssh "sudo /usr/local/bin/wg-deregister-peer.sh hetzner" >/dev/null 2>&1 \
+      || log "  (deregister skipped: hub lacks wg-deregister-peer.sh or it failed; register will print the manual step if the key differs)"
+  fi
+
   REG_OUT="$(gcp_ssh "sudo /usr/local/bin/wg-register-peer.sh hetzner '${HZ_PUB}' '${WG_MESH_IP}'")"
   HUB_PUB="$(printf '%s\n' "$REG_OUT" | awk '/^hub_public_key /{print $2}')"
   WG_PSK="$(printf  '%s\n' "$REG_OUT" | awk '/^psk /{print $2}')"
@@ -385,29 +413,28 @@ EOF
       sleep 5
     done
     if remote "test -s /run/hetzner-secrets/grafana.env" && remote "test -s /run/hetzner-secrets/cloudflare.ini"; then
-      log "Vault secrets rendered to tmpfs."
-      # Initial TLS cert (guarded so routine re-applies do not re-hit Let's Encrypt). nginx
-      # and alloy themselves are (re)started in section 9 below, once this cert + grafana.env exist.
-      if [[ -n "${VLESS_DOMAIN:-}" ]] && ! remote "test -d /etc/letsencrypt/live/${VLESS_DOMAIN}"; then
-        log "Obtaining the initial Let's Encrypt cert for ${VLESS_DOMAIN}..."
-        remote "certbot certonly --dns-cloudflare --dns-cloudflare-credentials /run/hetzner-secrets/cloudflare.ini -d ${VLESS_DOMAIN} --non-interactive --agree-tos --register-unsafely-without-email --dns-cloudflare-propagation-seconds 30" \
-          && log "Initial cert obtained." \
-          || log "WARNING: certbot failed; check the token in kv/hetzner/cloudflare."
-      fi
+      log "Vault secrets rendered to tmpfs. The TLS cert and Alloy/nginx are obtained/started"
+      log "on the box by hetzner-secrets-ready.path — the provisioner no longer runs certbot"
+      log "itself (two certbot instances at once collide on its lock)."
     else
-      log "WARNING: Vault secrets not rendered; Alloy + certbot will lack credentials. Check 'journalctl -u hetzner-secrets' and that kv/hetzner/{grafana,cloudflare} are seeded."
+      log "NOTE: secrets not rendered in-band yet (the mesh is still converging). No action needed:"
+      log "      hetzner-secrets retries every 15s until it succeeds, and hetzner-secrets-ready.path"
+      log "      then obtains the cert and starts Alloy/nginx automatically. If it never renders,"
+      log "      check 'journalctl -u hetzner-secrets' and that kv/hetzner/{grafana,cloudflare} are seeded."
     fi
   fi
 fi
 
 # ── 9. Start / restart all services ──────────────────────────────────────────
-# After section 8b: the mesh is up, secrets are in tmpfs (alloy's EnvironmentFile), and the
-# TLS cert exists (nginx). Tolerant restart so one failing unit warns rather than aborting.
+# The secret-dependent services (alloy, nginx) are NOT restarted here: they are owned by
+# hetzner-secrets-ready.path on the box, which obtains the cert and starts them once the
+# Vault secrets render — however long the mesh takes to converge. Restarting them here would
+# race that (and fail before the cert/grafana.env exist). Tolerant restart of the rest.
 log "Starting services..."
-remote systemctl restart conduit xray xray-exporter xray-user-stats alloy nginx xray-probe-client probe || true
+remote systemctl restart conduit xray xray-exporter xray-user-stats xray-probe-client probe || true
 
 sleep 5
-if remote systemctl is-active --quiet conduit xray xray-exporter xray-user-stats alloy nginx xray-probe-client probe; then
+if remote systemctl is-active --quiet conduit xray xray-exporter xray-user-stats xray-probe-client probe; then
   log "All services active."
 else
   log "WARNING: one or more services failed to start. Check: journalctl -u conduit -u xray -u xray-exporter -u xray-user-stats -u alloy -u nginx"
@@ -454,3 +481,9 @@ log ""
 log "Provisioning complete."
 log "VLESS URIs are in: $BACKUPS_DIR/clients/*.txt"
 log "Metrics flowing to Grafana Cloud."
+
+# Everything above succeeded (set -e), so this box is fully provisioned. Record its hcloud
+# server id as the baseline the next apply compares against to detect a rebuild — driving
+# both the host-key-pin clear and the WireGuard peer-key rotation. Deferred to here (not
+# right after SSH) so a failure mid-provision leaves the signal intact for the retry.
+vh_record_server_id "${SERVER_ID:-}" "${BACKUPS_DIR}/known_hosts.serverid"

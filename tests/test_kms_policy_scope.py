@@ -17,7 +17,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MAIN_TF = REPO_ROOT / "aws" / "main.tf"
 
-DESTRUCTIVE = {"kms:ScheduleKeyDeletion", "kms:DeleteAlias", "kms:UpdateAlias"}
+# Genuinely destructive / signing actions that must stay resource-scoped. kms:UpdateAlias
+# is NOT here: it is alias management, and it must run UNCONDITIONED — on CA rotation SPIRE
+# repoints the alias to a freshly created key with no SPIRE_SERVER/ alias yet, so a
+# kms:ResourceAliases condition matches nothing and denies the rotation (the server then
+# crash-loops). See test_update_alias_must_be_unconditioned.
+DESTRUCTIVE = {"kms:ScheduleKeyDeletion", "kms:DeleteAlias"}
 
 
 def kms_policy_statements():
@@ -99,6 +104,20 @@ class KmsScopeTest(unittest.TestCase):
                 )
         self.assertTrue(found, "no statement grants the destructive KMS actions at all — "
                                "SPIRE needs them for its own keys")
+
+    def test_update_alias_must_be_unconditioned(self):
+        """Regression: kms:UpdateAlias conditioned on kms:ResourceAliases crash-loops the
+        server. On rotation the alias is repointed to a brand-new key that has no
+        SPIRE_SERVER/ alias yet, so the condition can never match. It must be granted in a
+        statement with NO Condition (it is alias management, not signing or destruction)."""
+        granting = [s for s in self.stmts if "kms:UpdateAlias" in actions_of(s)]
+        self.assertTrue(granting, "kms:UpdateAlias not granted at all — the SPIRE server "
+                                  "cannot rotate its X509 CA and will crash-loop")
+        for stmt in granting:
+            self.assertNotIn(
+                "Condition", stmt,
+                "kms:UpdateAlias is in a conditioned statement; on rotation the target key "
+                "has no alias yet, so the condition denies it and the server crash-loops")
 
     def test_spire_can_still_create_and_sign(self):
         """The fix must not break SPIRE's normal operation."""

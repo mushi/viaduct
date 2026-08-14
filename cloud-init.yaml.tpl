@@ -352,6 +352,10 @@ write_files:
       Description=Grafana Alloy (metrics agent)
       After=network-online.target conduit.service xray-exporter.service hetzner-secrets.service
       Wants=network-online.target hetzner-secrets.service
+      # Alloy fails to start until grafana.env is rendered (see EnvironmentFile below). With
+      # Restart=always it retries until then; disable the start-rate limit so it can never be
+      # given up on before the Vault fetch succeeds, however long the mesh takes.
+      StartLimitIntervalSec=0
 
       [Service]
       Type=simple
@@ -404,6 +408,9 @@ write_files:
       # reboot both are already enabled, so it runs cleanly and re-renders the secrets.
       After=network-online.target wg-quick@wg0.service spire-agent.service
       Wants=network-online.target
+      # No start-rate limit: the fetch may need to retry for minutes while the WireGuard
+      # handshake converges, and must not be limiter-killed before it succeeds.
+      StartLimitIntervalSec=0
 
       [Service]
       Type=oneshot
@@ -411,11 +418,61 @@ write_files:
       Group=viaduct-secrets
       # setgid dir (2750) so rendered files inherit group alloy; the '+' runs as root.
       ExecStartPre=+/usr/bin/install -d -o viaduct-secrets -g alloy -m 2750 /run/hetzner-secrets
+      # The mesh-handshake gate reads `wg show`, which needs CAP_NET_ADMIN — the unprivileged
+      # viaduct-secrets ExecStart below cannot, so enforce it here as root ('+'). The fetch
+      # runs only once the mesh has authenticated the hub; until then this fails and
+      # Restart=on-failure retries. (Previously the gate lived in the fetch script and always
+      # failed because viaduct-secrets gets no output from `wg show`.)
+      ExecStartPre=+/bin/bash -c '. /usr/local/bin/lib/mesh-trust.sh; vh_wait_for_mesh_handshake 10.99.0.1 wg0 60'
       ExecStart=/usr/local/bin/fetch-hetzner-secrets.sh
       RemainAfterExit=yes
+      # Self-heal: retry every 15s until the mesh is up and the fetch succeeds, then
+      # RemainAfterExit holds it active. This is what makes a slow mesh converge not need a
+      # re-provision — the provisioner's in-band attempt is now just the fast path.
+      Restart=on-failure
+      RestartSec=15
 
       [Install]
       WantedBy=multi-user.target
+
+  # Finish-setup trigger: when the secrets finally render (however long the mesh took),
+  # obtain the TLS cert if absent and (re)start the secret-dependent services, so a rebuild
+  # completes hands-off with no re-provision. The .path watches the rendered file; the
+  # oneshot is idempotent.
+  - path: /usr/local/bin/hetzner-secrets-ready.sh
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -uo pipefail
+      if [ -s /run/hetzner-secrets/cloudflare.ini ] && [ ! -d /etc/letsencrypt/live/${vless_domain} ]; then
+        certbot certonly --dns-cloudflare --dns-cloudflare-credentials /run/hetzner-secrets/cloudflare.ini \
+          -d ${vless_domain} --non-interactive --agree-tos --register-unsafely-without-email --dns-cloudflare-propagation-seconds 30 || true
+      fi
+      systemctl restart alloy.service 2>/dev/null || true
+      [ -d /etc/letsencrypt/live/${vless_domain} ] && systemctl restart nginx.service 2>/dev/null || true
+
+  - path: /etc/systemd/system/hetzner-secrets-ready.path
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Trigger finish-setup when Vault secrets render
+      [Path]
+      PathExists=/run/hetzner-secrets/grafana.env
+      Unit=hetzner-secrets-ready.service
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/hetzner-secrets-ready.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Obtain TLS cert and start secret-dependent services
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/hetzner-secrets-ready.sh
 
   # ── xray-user-stats: per-user traffic exporter ───────────────────────────
   # xray-exporter intentionally skips user-level stats from the Stats API
@@ -684,22 +741,39 @@ write_files:
         fi
       fi
 
-      # api4.my-ip.io is an unauthenticated third party, and this value is interpolated
-      # into the JSON config literal below and into every generated client URI. Validate
-      # it once here so no consumer receives an unvalidated response; a hostile or MITM'd
-      # reply otherwise injects directly into the rendered configuration.
+      # This node's public IPv4 cannot be injected from Terraform (a server referencing
+      # its own address in its own user_data is a dependency cycle), so the box discovers
+      # it at boot. Several unauthenticated third parties are tried in turn — one being
+      # down (as api4.my-ip.io was) no longer wedges the whole setup. Every candidate is
+      # interpolated into config.json and client URIs, so each is format-validated before
+      # use; a hostile or MITM'd reply cannot inject. A wrong-but-well-formed value is the
+      # residual risk, unchanged from a single-endpoint lookup.
       vh_is_ipv4() {
         [[ "$${1:-}" =~ ^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$ ]]
       }
 
-      SERVER_IP=$(curl -fsSL --max-time 5 https://api4.my-ip.io/ip.json \
-                  | jq -r '.ip' 2>/dev/null || true)
-      if ! vh_is_ipv4 "$SERVER_IP"; then
-        echo "xray-setup: public IP lookup returned no usable address; falling back to the local address" >&2
-        SERVER_IP=$(hostname -I | awk '{print $1}')
+      SERVER_IP=""
+      for url in https://api.ipify.org https://icanhazip.com https://ifconfig.me/ip https://checkip.amazonaws.com; do
+        cand=$(curl -4 -fsSL --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]')
+        if vh_is_ipv4 "$cand"; then SERVER_IP="$cand"; break; fi
+      done
+
+      if [ -z "$SERVER_IP" ]; then
+        # Every lookup failed. Fall back to a PUBLIC address on this host — never a
+        # private or mesh one: hostname -I lists wg0's 10.99.0.2 too, and rendering that
+        # into the client URIs would hand out a dead server address.
+        echo "xray-setup: public IP lookup failed on all endpoints; trying a public host address." >&2
+        for cand in $(hostname -I); do
+          vh_is_ipv4 "$cand" || continue
+          case "$cand" in
+            10.*|127.*|169.254.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*) continue ;;
+          esac
+          SERVER_IP="$cand"; break
+        done
       fi
+
       if ! vh_is_ipv4 "$SERVER_IP"; then
-        echo "ERROR: could not determine a valid IPv4 address for this node." >&2
+        echo "ERROR: could not determine a public IPv4 address for this node." >&2
         echo "       Refusing to render config.json and client URIs around an unvalidated value." >&2
         exit 1
       fi
@@ -1097,15 +1171,16 @@ runcmd:
         ssl_session_cache   shared:SSL:10m;
         ssl_session_timeout 10m;
 
+        # Finite header/body timeouts (server scope — nginx forbids these inside a location):
+        # a slow-header or slow-body client must not be able to pin a worker indefinitely.
+        client_header_timeout 15s;
+        client_body_timeout   30s;
+
         location /api {
             # Unauthenticated and Internet-reachable, so bound what one client can hold.
             limit_conn api_conn 16;
             limit_req  zone=api_req burst=60 nodelay;
 
-            # Finite header/body timeouts: a slow-header or slow-body client should not
-            # be able to pin a worker indefinitely.
-            client_header_timeout 15s;
-            client_body_timeout   30s;
             send_timeout          60s;
 
             proxy_pass         http://127.0.0.1:10000;
@@ -1202,6 +1277,10 @@ runcmd:
   - systemctl daemon-reload
   - systemctl reload ssh   # apply SSH hardening (root login off; deploy/ops only)
   - systemctl enable conduit.service xray.service xray-exporter.service xray-user-stats.service alloy.service nginx.service xray-probe-client.service probe.service hetzner-secrets.service
+  # --now so the watcher is live THIS boot (multi-user.target is already active, so a plain
+  # enable would only arm it for the next boot). It fires the finish-setup oneshot as soon as
+  # hetzner-secrets renders grafana.env, however long the mesh takes to converge.
+  - systemctl enable --now hetzner-secrets-ready.path
 
   # ── Signal cloud-init completion ──────────────────────────────────────────
   # Only reached if all checksum verifications above passed.

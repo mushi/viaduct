@@ -13,18 +13,23 @@ be up and its readiness gate returned before the spokes, which authenticate into
 script is in instance metadata; Hetzner and AWS keep `user_data` under `ignore_changes`).
 Rebuild explicitly:
 
-| Node | Command |
-|---|---|
+| Node | Command                                                                   |
+|---|---------------------------------------------------------------------------|
 | GCP control plane | `cd gcp && terraform apply -replace=google_compute_instance.controlplane` |
-| Hetzner data plane | `terraform apply -replace=hcloud_server.conduit` (repo root) |
-| AWS node | `cd aws && terraform apply -replace=aws_instance.spire` |
+| Hetzner data plane | (repo root) `terraform apply -replace=hcloud_server.conduit`              |
+| AWS node | `cd aws && terraform apply -replace=aws_instance.spire`                   |
 
-Two rebuilds need one command first, or they stop:
+A spoke rebuild needs nothing up front. `provision.sh` (Hetzner) and `wg-mesh-join.sh`
+(AWS) recognise a genuine rebuild from the cloud instance id and self-heal the two things a
+rebuild changes: they clear the stale SSH host-key pin, and rotate the spoke's WireGuard
+registry key over IAP (`wg-deregister-peer.sh` on the hub, scoped to the `wireguard-hub`
+role, then a fresh register). A re-key *not* backed by a new instance id is left alone and
+fails closed, so a routine re-provision (same key) never disturbs the mesh.
 
-| Rebuilding | Run first | Why |
-|---|---|---|
-| Hetzner | `export VIADUCT_HOST_KEY_RESET=1` | The host-key pin is kept between runs; a new node presents a new key and provisioning fail-closes |
-| A spoke that will present a **new** WireGuard key | `vault kv delete kv/wireguard/peers/<name>` | Re-registering a name with a different key is refused. Unchanged-key re-applies need nothing |
+Two escape hatches remain for the case auto-detection deliberately won't act on — an
+out-of-band re-key that kept the same instance id (e.g. an OS reinstall): `VIADUCT_HOST_KEY_RESET=1`
+forces the pin clear (and, on Hetzner, the WG rotation), and `vault kv delete kv/wireguard/peers/<name>`
+clears the registry entry by hand (also the fallback if the hub predates `wg-deregister-peer.sh`).
 
 A GCP rebuild needs no follow-up on the spokes: each fetches GCP Vault's (rotated) cert
 fresh over the mesh when it next needs it (Hetzner at boot, AWS at Alloy pod start), so a
@@ -36,18 +41,18 @@ repo-root `terraform apply` (re-runs `scripts/provision.sh`, a few-second servic
 rebuild); a GCP change needing an instance stop (`machine_type`, shielded config) adds
 `-var 'allow_stopping_for_update=true'`.
 
-## When an apply or boot stops
+## If an apply or boot stops
 
 Everything below is deliberate fail-closed behaviour. Match the message, run the fix.
 
 | Message mentions | Fix |
 |---|---|
-| host key mismatch / `StrictHostKeyChecking` | `export VIADUCT_HOST_KEY_RESET=1` and re-apply (only for a rebuild you intended) |
-| `already registered with a different public key` | `vault kv delete kv/wireguard/peers/<name>`, re-apply |
+| host key mismatch / `StrictHostKeyChecking` | The key changed with no new hcloud server id (a real rebuild would auto-clear the pin). If you caused it out-of-band and intended it, re-apply with `export VIADUCT_HOST_KEY_RESET=1`; otherwise investigate — the pin is doing its job |
+| `already registered with a different public key` | A real rebuild auto-clears this; you see it only if the hub predates `wg-deregister-peer.sh` or the key changed with no new instance id. Clear it by hand: `vault kv delete kv/wireguard/peers/<name>`, re-apply |
 | `already registered to peer` | That mesh IP belongs to another peer. Free it, or pick another address |
 | `does not contain a UUID` | Delete the named file under `backups/clients/`; a fresh UUID is minted (the old client credential is revoked) |
 | `refusing to render`, `prometheus_url`/`api_key`/`cf_api_token` | A Vault value is malformed — usually a trailing newline. Re-enter it: `vault kv put kv/hetzner/grafana …` |
-| `could not determine a valid IPv4` | The node's public-IP lookup failed. Retry; if it persists, check egress from the node |
+| `could not determine a public IPv4` | Every public-IP lookup endpoint failed and the host has no public address to fall back to. Retry; if it persists, check the node's outbound/DNS |
 | digest mismatch on k3s / aws-cli / geoip / geosite | Upstream moved. Refresh the pins — see [Routine maintenance](#routine-maintenance) |
 | Vault denies a `policy write` / `auth enable` | The standing `admin` login cannot provision. `vault operator generate-root` with your recovery keys |
 
@@ -87,7 +92,7 @@ apply until Vault and SPIRE are up (SPIRE stays down until step 2 configures its
 Reach the box over IAP (no public SSH):
 
 ```sh
-gcloud compute ssh viaduct-controlplane --zone <zone> --project <project> --tunnel-through-iap
+gcloud compute ssh viaduct-controlplane --zone <zone>  --tunnel-through-iap
 ```
 
 On the box:
@@ -145,9 +150,11 @@ cp terraform.tfvars.example terraform.tfvars    # set gcp_control_plane_ip (+ gc
 terraform init && terraform apply
 ```
 
-The provisioners join AWS to the mesh and sync GCP Vault's cert fingerprint live over IAP +
-SSM (no pinned fingerprint to maintain). The `aws-vault-agent` cert role on GCP Vault is
-created automatically by `federation-sync`.
+The provisioners join AWS to the mesh (SSM + IAP) and push the AWS trust bundle to GCP
+(`federation-sync`, over IAP). The node then self-bootstraps the federation import and Alloy
+over the mesh; Alloy fetches GCP Vault's cert over the mesh at pod start (trust-on-first-use,
+no fingerprint to maintain). The `aws-vault-agent` cert role on GCP Vault is created
+automatically by `federation-sync`.
 
 > **Deployment-identity IAM.** The AWS mesh-join provisioner (`aws/wireguard.tf`) runs SSM
 > Run Command on the box and relays the peer PSK through an SSM SecureString. So the identity
@@ -180,7 +187,7 @@ Gives you Vault, SPIRE, and Hetzner admin over `wg0` instead of public paths.
 
    ```sh
    umask 077; wg genkey | tee operator.key | wg pubkey > operator.pub
-   gcloud compute ssh viaduct-controlplane --zone <zone> --project <project> --tunnel-through-iap \
+   gcloud compute ssh viaduct-controlplane --zone <zone>  --tunnel-through-iap \
      --command "sudo /usr/local/bin/wg-register-peer.sh operator $(cat operator.pub) 10.99.0.4"
    # prints:  hub_public_key <HUB_PUB>
    #          psk            <PSK>
@@ -215,7 +222,7 @@ Gives you Vault, SPIRE, and Hetzner admin over `wg0` instead of public paths.
   **regenerated on every GCP rebuild**, so pull the current one first, then verify (no
   `-k`):
   ```sh
-  gcloud compute ssh viaduct@viaduct-controlplane --zone <zone> --project <project> \
+  gcloud compute ssh viaduct@viaduct-controlplane --zone <zone>  \
     --tunnel-through-iap --ssh-key-file=~/.ssh/viaduct_lab \
     --command 'sudo cat /opt/vault/tls/vault.crt' > ~/vault.crt
   curl --cacert ~/vault.crt https://10.99.0.1:8200/v1/sys/health   # sealed:false, initialized:true
@@ -223,8 +230,8 @@ Gives you Vault, SPIRE, and Hetzner admin over `wg0` instead of public paths.
 
 ## Routine maintenance
 
-**Pins.** Seven values pin what the nodes download. A boot fails closed on a mismatch —
-that is the point. Refresh them, read the diff, commit:
+**Pins.** Seven values pin what the nodes download. A boot deliberately fails closed on a mismatch. 
+Refresh them, read the diff, commit:
 
 ```sh
 ./scripts/get-checksums.sh   # prints every pin ready to paste, and flags newer upstream releases
@@ -275,9 +282,10 @@ first boot; a fresh backup is taken just before the old instance is destroyed, a
 readiness gate holds the apply until Vault is unsealed and SPIRE is active. No manual steps.
 
 A rebuild regenerates the Vault listener cert (new key, same SANs), so any locally cached
-`~/vault.crt` goes stale: re-pull it (see step 7) for local verification, and run the
-refresh-AWS-after-a-GCP-rebuild apply from the [apply-order](#apply-order-read-first) rules
-so the AWS side re-syncs the new fingerprint.
+`~/vault.crt` goes stale: re-pull it (see step 7) for local verification. The spokes need no
+action: each re-fetches the rotated cert over the mesh when it next needs it (Hetzner at
+boot, AWS at Alloy pod start), and GCP's SPIRE CA is stable across a rebuild (restored from
+the snapshot), so federation needs no re-import either.
 
 `vault-snapshot.service` writes `vault.snap` (Vault Raft) and `spire-data.tar.gz` (SPIRE
 datastore + `keys.json`) to the bucket, weekly on a timer and once more just before every

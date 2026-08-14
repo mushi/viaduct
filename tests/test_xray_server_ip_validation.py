@@ -90,6 +90,19 @@ class ServerIpValidationTest(unittest.TestCase):
                 f"SERVER_IP resolved to a non-IPv4 value {resolved!r}",
             )
 
+    def test_public_host_fallback_skips_the_mesh_address(self):
+        """When every lookup is down, fall back to a PUBLIC host address, never the
+        wg0 mesh IP (which would render a dead server address into the client URIs)."""
+        p = run_with("no-usable-ip", hostname_output="10.99.0.2 203.0.113.7 fe80::1")
+        self.assertIn("RESOLVED=203.0.113.7", p.stdout,
+                      f"the public host address was not chosen (rc={p.returncode}, {p.stderr[:200]})")
+
+    def test_private_only_host_yields_no_address(self):
+        """A host with only private/mesh addresses must fail closed, not hand out one."""
+        p = run_with("no-usable-ip", hostname_output="10.99.0.2 192.168.1.5")
+        self.assertNotIn("RESOLVED=10.99.0.2", p.stdout)
+        self.assertNotIn("RESOLVED=192.168.1.5", p.stdout)
+
     def test_every_consumer_is_downstream_of_the_guard(self):
         """The validation must dominate the config literal and the client URI."""
         body = render(TPL.read_text())

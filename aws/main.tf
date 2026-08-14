@@ -125,10 +125,13 @@ resource "aws_iam_role_policy" "kms" {
     Version = "2012-10-17"
     Statement = [
       # Operations AWS cannot resource-scope: CreateKey has no resource yet, and the
-      # List* actions are account-level by definition. CreateAlias and TagResource
-      # also act on a key that has no SPIRE_SERVER/ alias yet, so a ResourceAliases
-      # condition would deny SPIRE its own first alias. What remains here is
-      # enumeration, key creation and metadata — no signing and no destruction.
+      # List* actions are account-level by definition. CreateAlias AND UpdateAlias act on a
+      # key that has no SPIRE_SERVER/ alias yet — on X509 CA rotation SPIRE creates a fresh
+      # key and repoints the alias to it, and a kms:ResourceAliases condition reads the
+      # TARGET key's *existing* aliases (none, so it matches nothing and denies the
+      # rotation → the server crash-loops). TagResource is the same. What remains here is
+      # enumeration, key creation and alias management — no signing, no key destruction
+      # (those stay resource-scoped below).
       {
         Effect = "Allow"
         Action = [
@@ -138,6 +141,7 @@ resource "aws_iam_role_policy" "kms" {
           "kms:ListKeys",
           "kms:ListAliases",
           "kms:CreateAlias",
+          "kms:UpdateAlias",
           "kms:TagResource"
         ]
         Resource = "*"
@@ -150,7 +154,6 @@ resource "aws_iam_role_policy" "kms" {
         Effect = "Allow"
         Action = [
           "kms:ScheduleKeyDeletion",
-          "kms:UpdateAlias",
           "kms:DeleteAlias",
           # Signing belongs here, not above: unscoped it let the instance role sign
           # with every asymmetric KMS key in the account, which is the other half of
@@ -238,7 +241,10 @@ resource "aws_instance" "spire" {
   # federation, k3s, workloads, egress guardrail. k8s manifests + scripts are
   # single-sourced from k8s/ and scripts/ (injected verbatim via file()).
   # gzip'd: rendered script exceeds the 16 KB user_data cap; cloud-init decompresses.
-  user_data_base64 = base64gzip(templatefile("${path.module}/scripts/startup.sh.tpl", {
+  # Strip full-line comments (keep shebangs) from the rendered user_data so it fits EC2's
+  # 16 KiB limit — the campaign's manifests + scripts + the grown mesh-trust lib pushed it to
+  # ~24 KiB. The source files keep their comments; only the deployed copy is lean (~13.4 KiB).
+  user_data_base64 = base64gzip(replace(templatefile("${path.module}/scripts/startup.sh.tpl", {
     region               = var.region
     wg_hub_ip            = var.wg_hub_ip
     trust_domain         = var.trust_domain
@@ -259,7 +265,7 @@ resource "aws_instance" "spire" {
     # copy; crosscloud-bootstrap.sh runs from /opt/viaduct on the node, so the
     # library is installed next to it by startup.sh.tpl.
     mesh_trust_lib = file("${path.module}/../scripts/lib/mesh-trust.sh")
-  }))
+  }), "/(?m)^[[:blank:]]*#([^!].*)?$/", ""))
   # IMDSv2 required (token-based) — aws_iid fetches the identity document here.
   metadata_options {
     http_tokens   = "required"

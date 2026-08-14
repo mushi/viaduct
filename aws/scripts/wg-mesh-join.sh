@@ -87,6 +87,15 @@ vh_require vh_is_wg_key  "AWS wg0.pub (AWS_PUB)" "$AWS_PUB"    || exit 1
 vh_require vh_is_mesh_ip "mesh IP (WG_MESH_IP)"  "$WG_MESH_IP" || exit 1
 log "AWS node ready; public key retrieved."
 
+# terraform_data.wg_mesh_join fires only when aws_instance.spire.id changes (a
+# recreate), so the box always presents a fresh key here. Clear any stale registry
+# entry first so the hub does not refuse the re-register; a harmless no-op on a first
+# deploy. Authorised by that instance-id trigger — the same unforgeable rebuild signal
+# Hetzner gates on. Tolerant: an un-updated hub without the script falls back to the refusal.
+log "Clearing any stale 'aws' mesh registry entry (this step runs only on a rebuild)..."
+gcp_ssh "sudo /usr/local/bin/wg-deregister-peer.sh aws" >/dev/null 2>&1 \
+  || log "  (deregister skipped: hub lacks wg-deregister-peer.sh or it failed; register will print the manual step if the key differs)"
+
 log "Registering with the hub ${GCP_INSTANCE} over IAP..."
 REG_OUT="$(gcp_ssh "sudo /usr/local/bin/wg-register-peer.sh aws '${AWS_PUB}' '${WG_MESH_IP}'")"
 HUB_PUB="$(printf '%s\n' "$REG_OUT" | awk '/^hub_public_key /{print $2}')"

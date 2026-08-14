@@ -188,8 +188,13 @@ vault write auth/gcp/role/restore-agent type=gce project_id="$PROJECT" bound_zon
 # and take over the mesh, rather than merely registering spokes. startup.sh:400 notes the
 # hub key is generated once then only fetched, and the write at :477 runs only when it is
 # absent, so create+read is sufficient there.
+# `delete` on peers lets wg-deregister-peer.sh clear a rebuilt spoke's stale entry so its
+# fresh key can register — full peer-registry lifecycle stays in this one scoped role
+# (mintable only by the hub's GCE identity) instead of reaching for admin. The takeover
+# path is still closed: wg-register-peer.sh's different-key refusal is unchanged, and
+# deletion is only invoked by wg-deregister-peer.sh, callable only by root on the hub.
 vault policy write wireguard-hub - <<'EOF'
-path "kv/data/wireguard/peers/*"     { capabilities = ["create", "read", "update"] }
+path "kv/data/wireguard/peers/*"     { capabilities = ["create", "read", "update", "delete"] }
 path "kv/data/wireguard/hub"         { capabilities = ["create", "read"] }
 path "kv/metadata/wireguard/*"       { capabilities = ["read", "list"] }
 EOF

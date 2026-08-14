@@ -23,6 +23,11 @@ STARTUP = REPO_ROOT / "gcp" / "scripts" / "startup.sh"
 
 VALID_KEY = "kOtkkR2VfEHFN0m3ES0BJ0BpKbXPQ8YvvKZ5RRSXSHQ="
 OTHER_KEY = "aB3dEfGhIjKlMnOpQrStUvWxYz0123456789+/ABCc="
+# Canonical 32-byte keys whose 43rd char is '0'/'8' (base64 value % 4 == 0, the
+# legal set). The earlier allowlist omitted these, rejecting 1 in 8 real keys at
+# random — KEY_ENDING_0 is the actual AWS peer key that surfaced the bug.
+KEY_ENDING_0 = "HJjVF0HZcIAoq5sE2tYGEmCNq3uOQRlTPeqg753/6S0="
+KEY_ENDING_8 = "wLMJVam4KktCmyDFw3mjqSA4BiNfIFJlWDd8xOA6T68="
 HUB_IP = "10.99.0.1"
 
 
@@ -50,6 +55,14 @@ class EmittedValidatorTest(unittest.TestCase):
     def test_key_allowlist_accepts_a_real_key(self):
         self.assertEqual(call("vh_is_wg_key", VALID_KEY), 0,
                          "a genuine WireGuard key must be accepted or peer sync breaks")
+
+    def test_key_allowlist_accepts_valid_keys_ending_0_or_8(self):
+        """Regression: 43rd char '0'/'8' is legal (value % 4 == 0); the earlier class
+        rejected them, so ~1 in 8 nodes failed to register their key at random."""
+        for k in (KEY_ENDING_0, KEY_ENDING_8):
+            with self.subTest(key=k):
+                self.assertEqual(call("vh_is_wg_key", k), 0,
+                                 f"a canonical 32-byte WireGuard key was rejected: {k}")
 
     def test_key_allowlist_rejects_injection_and_malformed(self):
         for bad in ["x; touch /tmp/pwned #", "x$(id)", VALID_KEY + "; id", "", "notakey",

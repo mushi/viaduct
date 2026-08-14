@@ -33,10 +33,17 @@ set -e
 
 # vh_wait_for_mesh_handshake, inline: wg-quick returning does not mean a peer has
 # authenticated. Without this the fetch can run across a mesh that authenticates nobody.
-deadline=\$(( SECONDS + 30 ))
-until pubkey=\$(wg show wg0 allowed-ips 2>/dev/null | awk -v ip="$AWS_MESH_HOST/32" '{ for (i = 2; i <= NF; i++) if (\$i == ip) { print \$1; exit } }') \\
+# `wg show` needs CAP_NET_ADMIN, and this heredoc runs as the IAP SSH user, not root, so
+# these two reads MUST be sudo — unprivileged they return nothing, and the gate then
+# reports "no live handshake" on a perfectly healthy mesh (it never sees the interface).
+# The window is 180s, not seconds: this runs right after wg_mesh_join registers the AWS
+# peer on the hub, and a cross-cloud cold start must still initiate its first handshake
+# (the hub has no endpoint for the spoke, so it waits on the spoke's 25s keepalive). It
+# still fails closed, and 180s sits well inside the 300s bundle-endpoint budget below.
+deadline=\$(( SECONDS + 180 ))
+until pubkey=\$(sudo wg show wg0 allowed-ips 2>/dev/null | awk -v ip="$AWS_MESH_HOST/32" '{ for (i = 2; i <= NF; i++) if (\$i == ip) { print \$1; exit } }') \\
       && [ -n "\$pubkey" ] \\
-      && hs=\$(wg show wg0 latest-handshakes 2>/dev/null | awk -v k="\$pubkey" '\$1 == k { print \$2; exit }') \\
+      && hs=\$(sudo wg show wg0 latest-handshakes 2>/dev/null | awk -v k="\$pubkey" '\$1 == k { print \$2; exit }') \\
       && [ -n "\$hs" ] && [ "\$hs" -gt 0 ] && [ \$(( \$(date +%s) - hs )) -lt 180 ]; do
   if [ "\$SECONDS" -ge "\$deadline" ]; then
     echo "ERROR: no live WireGuard handshake with $AWS_MESH_HOST; refusing to import a trust root over an unauthenticated mesh" >&2

@@ -96,6 +96,18 @@ class RemoteImportGateTest(unittest.TestCase):
                           f"a valid bundle over a live mesh must still import "
                           f"(rc={p.returncode}, stderr={p.stderr[:200]})")
 
+    def test_handshake_gate_reads_wg_with_sudo(self):
+        """Regression: the heredoc runs as the IAP SSH user, not root, but `wg show`
+        needs CAP_NET_ADMIN. Unprivileged it returns nothing, so the gate reports "no
+        live handshake" on a healthy mesh and the bundle never imports. Every `wg show`
+        in the gate must be invoked through sudo."""
+        remote = extract_remote()
+        for m in re.finditer(r"^\s*[^#\n]*\bwg\s+show\b.*$", remote, re.M):
+            self.assertRegex(
+                m.group(0), r"\bsudo\s+wg\s+show\b",
+                f"`wg show` in the handshake gate is not run through sudo: {m.group(0).strip()!r} "
+                f"— unprivileged it cannot read wg0 and the gate always fails")
+
 
 if __name__ == "__main__":
     unittest.main()

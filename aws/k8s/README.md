@@ -20,7 +20,7 @@ which is how a pod gets an SVID.
 │ SPIRE agent      aws_iid node attestation · serves the Workload API socket       │
 │ k3s server       --disable traefik, servicelb                                    │
 │ timers           spire-agent-token (k8s SA token) · egress-guardrail             │
-│                  (~90 GB auto-stop) · viaduct-crosscloud (bootstrap)             │
+│                  (egress cap 90 GB) · viaduct-crosscloud (bootstrap)             │
 ├─ k3s pods ───────────────────────────────────────────────────────────────────────┤
 │ spire   ns   spiffe-csi-driver (DaemonSet)                                       │
 │              └ projects the agent's Workload API socket into pods                │
@@ -58,7 +58,7 @@ placeholder in `20` first (`sed "s|__GCP_CONTROL_PLANE_IP__|<gcp-ip>|g"`).
 ## Notes
 
 - The k8s SA token and the SPIRE entry aren't vendored as YAML, they depend on a runtime instance-id and a host-minted token (see [Hardening](#hardening)).
-- Egress cost is bounded by the host `egress-guardrail` timer (auto-stop near 90 GB/mo); the gauge `aws_mtd_egress_bytes` / `aws_egress_cap_bytes` reaches Grafana via the Alloy unix-exporter textfile collector.
+- Egress cost is bounded by the host `egress-guardrail` timer: it throttles egress (tc/htb, mesh exempt) at 70% of the cap, then stops the instance near 90 GB/mo. The gauge `aws_mtd_egress_bytes` / `aws_egress_cap_bytes` reaches Grafana via the Alloy unix-exporter textfile collector.
 
 ## Hardening
 
