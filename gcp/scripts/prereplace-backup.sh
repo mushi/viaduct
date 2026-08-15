@@ -28,7 +28,7 @@ if gcloud compute ssh "${GCP_SSH_USER}@${GCP_INSTANCE}" \
      --ssh-flag="-o StrictHostKeyChecking=accept-new" \
      --ssh-flag="-o ConnectTimeout=15" \
      --command 'sudo systemctl start vault-snapshot.service'; then
-  echo "Pre-replace backup complete: vault.snap + spire-data.tar.gz refreshed in the snapshot bucket."
+  echo "Pre-replace backup complete: fresh timestamped vault-<UTC>.snap + spire-data-<UTC>.tar.gz.enc written to the snapshot bucket."
 else
   echo "WARNING: pre-replace backup did NOT complete (instance unreachable or the snapshot job failed)." >&2
   echo "         The rebuilt instance will restore from the most recent EXISTING snapshot in the bucket." >&2

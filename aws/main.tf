@@ -114,9 +114,16 @@ resource "aws_iam_role" "spire" {
 # only destructive action SPIRE's prune needs. kms:CancelKeyDeletion stays
 # withheld: SPIRE never needs it, and withholding it means a compromised box can
 # at worst schedule a deletion, which KMS holds in a 7-30 day pending window that
-# only the operator identity can cancel. Stronger follow-up (test via -replace
-# first): condition ScheduleKeyDeletion on the tag SPIRE applies to its keys, so
-# it can delete only its own keys, instead of Resource "*".
+# only the operator identity can cancel. ScheduleKeyDeletion is scoped by TAG, not
+# alias: SPIRE repoints a key's alias to its replacement BEFORE pruning the old key,
+# so an alias condition (kms:ResourceAliases) matches nothing on the orphaned key and
+# denies the prune — the key then lingers. SPIRE tags every key it creates
+# (key_tags in the aws_kms KeyManager config), and that tag survives the alias move,
+# so kms:ResourceTag confines deletion to SPIRE's own keys AND still lets it prune.
+# The two must stay in sync (test_kms_key_tag_matches_policy). This is no weaker than
+# alias-scoping: with unconditioned CreateAlias/UpdateAlias the box can already mark an
+# arbitrary key before deleting it either way — the condition prevents blanket deletion,
+# which is the finding.
 resource "aws_iam_role_policy" "kms" {
   name = "spire-aws-kms"
   role = aws_iam_role.spire.id
@@ -146,24 +153,40 @@ resource "aws_iam_role_policy" "kms" {
         ]
         Resource = "*"
       },
-      # Destructive operations, scoped to the keys SPIRE actually manages. The
-      # aws_kms KeyManager addresses its keys through aliases under SPIRE_SERVER/,
-      # so kms:ResourceAliases confines deletion to those. Without this the instance
-      # role could schedule deletion of any KMS key in the account.
+      # Alias-scoped operations, on the keys SPIRE addresses through its SPIRE_SERVER/
+      # aliases. kms:ResourceAliases confines them to those keys. Signing belongs here:
+      # unscoped it let the instance role sign with every asymmetric KMS key in the
+      # account. SPIRE aliases a key before it ever signs with it, and DeleteAlias
+      # naturally acts on a live SPIRE_SERVER/ alias — both hold while the alias exists.
       {
         Effect = "Allow"
         Action = [
-          "kms:ScheduleKeyDeletion",
           "kms:DeleteAlias",
-          # Signing belongs here, not above: unscoped it let the instance role sign
-          # with every asymmetric KMS key in the account, which is the other half of
-          # what this finding named. SPIRE aliases a key before it ever signs with it.
           "kms:Sign"
         ]
         Resource = "*"
         Condition = {
           "ForAnyValue:StringLike" = {
             "kms:ResourceAliases" = ["alias/SPIRE_SERVER/*"]
+          }
+        }
+      },
+      # Key destruction, scoped by TAG. A rotated key's alias is repointed to its
+      # replacement before the prune runs, so the orphaned key has no SPIRE_SERVER/
+      # alias and an alias condition would deny its deletion. SPIRE tags every key it
+      # creates (viaduct-managed-by=spire-server; see aws/scripts/startup.sh.tpl), and
+      # that tag persists across the alias move, so this both confines deletion to
+      # SPIRE's own keys and lets the prune actually succeed. Without this the instance
+      # role could schedule deletion of any KMS key in the account.
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:ScheduleKeyDeletion"
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "kms:ResourceTag/viaduct-managed-by" = "spire-server"
           }
         }
       }

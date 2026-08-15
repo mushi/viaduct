@@ -190,8 +190,19 @@ done
 VAULT_INITIALISED="$(printf '%s' "$VS_JSON" | jq -r 'if has("initialized") then (.initialized | tostring) else "unknown" end' 2>/dev/null || echo unknown)"
 echo "restore-gate: vault initialised=${VAULT_INITIALISED}, bucket=${BUCKET}"
 
-if [ "$VAULT_INITIALISED" = "false" ] && gcloud storage ls "gs://$BUCKET/vault.snap" >/dev/null 2>&1; then
-  echo "Rebuilt instance with a backup present — restoring Vault + SPIRE."
+# Snapshots are written under unique, timestamped keys (vault-<UTC>.snap); the newest
+# is the last one lexically (ISO basic sorts by time). Fall back to the legacy fixed
+# key so a bucket written before the unique-name change still restores.
+pick_latest_snapshot() {  # $1=glob $2=legacy-exact -> newest gs:// URL, or empty
+  local newest
+  newest="$(gcloud storage ls "gs://$BUCKET/$1" 2>/dev/null | sort | tail -n1)"
+  if [ -n "$newest" ]; then printf '%s' "$newest"; return 0; fi
+  gcloud storage ls "gs://$BUCKET/$2" >/dev/null 2>&1 && printf 'gs://%s/%s' "$BUCKET" "$2"
+}
+LATEST_VAULT="$(pick_latest_snapshot 'vault-*.snap' 'vault.snap')"
+
+if [ "$VAULT_INITIALISED" = "false" ] && [ -n "$LATEST_VAULT" ]; then
+  echo "Rebuilt instance with a backup present ($LATEST_VAULT) — restoring Vault + SPIRE."
 
   # Vault: init a fresh cluster for a temporary root token, then restore the
   # snapshot (which invalidates that token). KMS auto-unseal re-applies to the
@@ -201,7 +212,7 @@ if [ "$VAULT_INITIALISED" = "false" ] && gcloud storage ls "gs://$BUCKET/vault.s
   # root-run script, invite a pre-created symlink redirecting the write. mktemp under a
   # restrictive umask removes both.
   VSNAP="$(umask 077; mktemp /tmp/vault.snap.XXXXXXXX)"
-  gcloud storage cp "gs://$BUCKET/vault.snap" "$VSNAP"
+  gcloud storage cp "$LATEST_VAULT" "$VSNAP"
   VAULT_TOKEN="$TMP_ROOT" vault operator raft snapshot restore -force "$VSNAP"
   rm -f "$VSNAP"
 
@@ -225,12 +236,14 @@ if [ "$VAULT_INITIALISED" = "false" ] && gcloud storage ls "gs://$BUCKET/vault.s
   # SPIRE: restore the datastore + keys so the CA and registration/federation
   # state are unchanged (no re-attestation). Ownership is fixed by §6's chown.
   # Current backups are KMS-encrypted (the archive carries the viaduct.gcp CA private
-  # keys). The plaintext name is still accepted so a bucket written before this change
-  # remains restorable — without that fallback, a rebuild against an older backup would
-  # silently come up with no SPIRE state.
-  if gcloud storage ls "gs://$BUCKET/spire-data.tar.gz.enc" >/dev/null 2>&1; then
+  # keys) and use unique, timestamped keys (spire-data-<UTC>.tar.gz.enc). Pick the
+  # newest, falling back to the legacy fixed encrypted name, then to a legacy plaintext
+  # object — so a bucket written before either change still restores; without those
+  # fallbacks a rebuild against an older backup would silently come up with no SPIRE state.
+  LATEST_SPIRE_ENC="$(pick_latest_snapshot 'spire-data-*.tar.gz.enc' 'spire-data.tar.gz.enc')"
+  if [ -n "$LATEST_SPIRE_ENC" ]; then
     SPD="$(umask 077; mktemp -d /tmp/spire-restore.XXXXXXXX)"
-    gcloud storage cp "gs://$BUCKET/spire-data.tar.gz.enc" "$SPD/spire-data.tar.gz.enc"
+    gcloud storage cp "$LATEST_SPIRE_ENC" "$SPD/spire-data.tar.gz.enc"
     gcloud kms decrypt \
       --location "$REGION" --keyring "$KEYRING" --key "$CRYPTOKEY" \
       --ciphertext-file "$SPD/spire-data.tar.gz.enc" \
@@ -350,9 +363,14 @@ systemctl restart spire-server
 
 # ── 7. Vault Raft snapshot → GCS (weekly) ────────────────────────────────────
 # Authenticates with the snapshot-saver AppRole (role_id from metadata, secret_id
-# from /opt/vault-snapshot/secret-id placed out-of-band). Writes to a fixed key;
-# the bucket keeps the last 3 versions (lifecycle rule in main.tf). The snapshot
-# is Vault's barrier-encrypted data, not plaintext.
+# from /opt/vault-snapshot/secret-id placed out-of-band). Writes a UNIQUE,
+# timestamped key each run (vault-<UTC>.snap): every upload is a pure create, so the
+# instance needs only objectCreator and can never overwrite or delete a backup —
+# append-only history. (A fixed key would need storage.objects.delete to overwrite,
+# which we deliberately withhold — so a fixed-key writer works exactly once and then
+# fails AccessDenied on every later snapshot.) GCS prunes old objects by age
+# (lifecycle rule in main.tf), performing the delete itself, so the box still holds
+# no delete. The snapshot is Vault's barrier-encrypted data, not plaintext.
 mkdir -p /opt/vault-snapshot
 chmod 0700 /opt/vault-snapshot
 
@@ -369,9 +387,13 @@ VAULT_TOKEN="$(vault write -field=token auth/approle/login role_id="$ROLE_ID" se
 export VAULT_TOKEN
 # The snapshot carries the whole Vault datastore, so it gets the same treatment as
 # the restore path: a predictable root-owned /tmp name is a symlink-redirect target.
+# One UTC timestamp per run, shared by the Vault and SPIRE objects so a snapshot and
+# its matching SPIRE archive are correlated. ISO basic (…Z) sorts lexically = by time,
+# which the restore path relies on to pick the newest.
+TS="$(date -u +%Y%m%dT%H%M%SZ)"
 VSNAP="$(umask 077; mktemp /tmp/vault.snap.XXXXXXXX)"
 vault operator raft snapshot save "$VSNAP"
-gcloud storage cp "$VSNAP" "gs://$BUCKET/vault.snap"
+gcloud storage cp "$VSNAP" "gs://$BUCKET/vault-$TS.snap"
 rm -f "$VSNAP"
 
 # SPIRE server state: a transaction-consistent sqlite copy (never a raw cp of a
@@ -392,7 +414,7 @@ gcloud kms encrypt \
   --location "$KMS_REGION" --keyring "$KMS_KEYRING" --key "$KMS_CRYPTOKEY" \
   --plaintext-file "$spdir/spire-data.tar.gz" \
   --ciphertext-file "$spdir/spire-data.tar.gz.enc"
-gcloud storage cp "$spdir/spire-data.tar.gz.enc" "gs://$BUCKET/spire-data.tar.gz.enc"
+gcloud storage cp "$spdir/spire-data.tar.gz.enc" "gs://$BUCKET/spire-data-$TS.tar.gz.enc"
 rm -rf "$spdir"
 SNAP
 chmod 0755 /usr/local/bin/vault-snapshot.sh

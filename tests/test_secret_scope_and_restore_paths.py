@@ -75,8 +75,10 @@ class GcpRestorePathTest(unittest.TestCase):
         writer = writer[: writer.index("spdir=")]
         self.assertIn("mktemp", writer,
                       f"the snapshot writer no longer allocates a temp name: {writer!r}")
-        self.assertRegex(writer, r'gcloud storage cp "\$VSNAP" "gs://\$BUCKET/vault\.snap"',
-                         "the snapshot is no longer uploaded to the bucket")
+        # Unique, timestamped key (vault-<TS>.snap) — a create, never an overwrite, so the
+        # create-only IAM binding suffices. Assert it is still uploaded, under that shape.
+        self.assertRegex(writer, r'gcloud storage cp "\$VSNAP" "gs://\$BUCKET/vault-\$TS\.snap"',
+                         "the snapshot is no longer uploaded to the bucket under a timestamped key")
 
     def test_no_fixed_spire_archive_path(self):
         for fixed in ("/tmp/spire-data.tar.gz.enc", "/tmp/spire-data.tar.gz"):

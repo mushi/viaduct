@@ -132,11 +132,26 @@ resource "google_storage_bucket" "vault_snapshots" {
     enabled = true
   }
 
-  # Snapshots write to a fixed key (vault.snap); keep the 3 most recent versions.
+  # Snapshots write unique, timestamped keys (vault-<UTC>.snap), so retention is by
+  # object age, not version count. GCS performs these deletes itself, so the instance
+  # needs no storage.objects.delete — it stays create-only (see the IAM binding below).
+  # Weekly snapshots + event-driven pre-replace backups → 90 days keeps ~13, ample for
+  # recovery; snapshots are small (barrier-encrypted Raft data) so the cost is trivial.
   lifecycle_rule {
     condition {
-      num_newer_versions = 3
-      with_state         = "ARCHIVED"
+      age = 90
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  # Versioning stays on as a belt-and-braces safety net (it protected the pre-change
+  # fixed-key scheme). With unique names the writer never overwrites, so no new
+  # noncurrent versions accrue; prune any that predate the change by age too.
+  lifecycle_rule {
+    condition {
+      days_since_noncurrent_time = 90
     }
     action {
       type = "Delete"
@@ -148,11 +163,13 @@ resource "google_storage_bucket" "vault_snapshots" {
   }
 }
 
-# The snapshot writer only ever creates new objects; the rebuild path only reads them.
-# objectAdmin additionally carries storage.objects.delete, which would let a compromised
-# control plane erase the very snapshots this bucket exists to preserve — defeating
-# prevent_destroy and versioning, the documented recovery control. Creator + Viewer keeps
-# backup and restore working without granting deletion.
+# The snapshot writer only ever creates new (uniquely-named) objects; the rebuild path
+# only reads them. objectAdmin additionally carries storage.objects.delete, which would
+# let a compromised control plane erase the very snapshots this bucket exists to preserve
+# — defeating prevent_destroy and versioning, the documented recovery control. Creator +
+# Viewer keeps backup and restore working without granting deletion; unique keys are what
+# make that sufficient (a fixed key would need delete to overwrite). Age-based pruning is
+# done by GCS itself (lifecycle above), not the instance, so no delete grant is required.
 resource "google_storage_bucket_iam_member" "vault_snapshots_create" {
   bucket = google_storage_bucket.vault_snapshots.name
   role   = "roles/storage.objectCreator"

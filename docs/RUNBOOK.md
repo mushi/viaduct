@@ -287,9 +287,15 @@ action: each re-fetches the rotated cert over the mesh when it next needs it (He
 boot, AWS at Alloy pod start), and GCP's SPIRE CA is stable across a rebuild (restored from
 the snapshot), so federation needs no re-import either.
 
-`vault-snapshot.service` writes `vault.snap` (Vault Raft) and `spire-data.tar.gz` (SPIRE
-datastore + `keys.json`) to the bucket, weekly on a timer and once more just before every
-replace. The bucket keeps the last 3 versions of each object.
+`vault-snapshot.service` writes a **uniquely-named, timestamped** pair each run —
+`vault-<UTC>.snap` (Vault Raft) and `spire-data-<UTC>.tar.gz.enc` (SPIRE datastore +
+`keys.json`, KMS-encrypted) — to the bucket, weekly on a timer and once more just before
+every replace. Unique keys mean the instance only ever *creates* objects (it holds
+`objectCreator`, never `objects.delete`), so a fixed key is not overwritten and the writer
+can't erase history — append-only backups. GCS prunes objects older than 90 days by
+lifecycle rule (the service does the delete, not the box). Restore picks the newest object
+of each kind (lexical = chronological), falling back to the legacy fixed names
+(`vault.snap`, `spire-data.tar.gz[.enc]`) for a bucket written before this change.
 
 **Break-glass (only if the automatic restore fails).** Reach the box over IAP and run the
 same sequence as the [restore block in `startup.sh`](../gcp/scripts/startup.sh#L136)

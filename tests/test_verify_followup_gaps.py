@@ -168,10 +168,17 @@ class KmsSignScopeTest(unittest.TestCase):
         self.assertIn("alias/SPIRE_SERVER/*", st)
 
     def test_destructive_actions_stay_scoped(self):
-        """Anchor: the half that was already fixed must not regress."""
+        """ScheduleKeyDeletion must stay scoped (never blanket Resource "*"), but by TAG,
+        not alias: SPIRE repoints a rotated key's alias to its replacement before pruning
+        the old key, so an alias condition denies the prune and orphaned keys linger.
+        The tag survives the alias move. See tests/test_kms_policy_scope.py."""
         st = self.statement_containing("kms:ScheduleKeyDeletion")
         self.assertIsNotNone(st)
-        self.assertIn("kms:ResourceAliases", st)
+        self.assertIn("kms:ResourceTag/", st,
+                      "ScheduleKeyDeletion is no longer tag-scoped")
+        self.assertNotIn("kms:ResourceAliases", st,
+                         "ScheduleKeyDeletion is alias-scoped again; the prune of de-aliased "
+                         "rotated keys would be denied (the pruning bug)")
 
     def test_createkey_stays_unscoped(self):
         """CreateKey has no resource yet; scoping it would deny SPIRE its own keys."""

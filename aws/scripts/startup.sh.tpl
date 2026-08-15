@@ -85,6 +85,15 @@ plugins {
     plugin_data {
       region               = "$REGION"
       key_identifier_value = "viaduct-aws"
+      # Tag every KMS key SPIRE creates so the instance IAM policy can scope
+      # kms:ScheduleKeyDeletion to SPIRE's own keys by TAG rather than by alias. On
+      # rotation SPIRE repoints the alias to the new key BEFORE it prunes the old one,
+      # so an alias condition denies the prune and the superseded key lingers (~$1/mo).
+      # The tag persists across the alias move. Keep in sync with the kms:ResourceTag
+      # condition in aws/main.tf's "spire-aws-kms" policy.
+      key_tags = {
+        "viaduct-managed-by" = "spire-server"
+      }
     }
   }
   NodeAttestor "aws_iid" {

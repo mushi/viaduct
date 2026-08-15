@@ -461,7 +461,13 @@ fi
 # Per-user .uuid and .txt files
 # Use a single remote command to list them, then download each over the
 # existing multiplexed connection.
-while IFS= read -r rf; do
+#
+# The list is read on FD 3, not stdin: download() runs `ssh` (via remote cat), and
+# ssh with an inherited stdin would read the rest of this list itself — draining the
+# pipe so the loop stops after the first file. That silently backed up only the first
+# client and lost every other user's .uuid/.txt (observed 2026-08-14). Keeping the list
+# on FD 3 leaves the inner ssh's stdin alone.
+while IFS= read -r rf <&3; do
   [[ -z "$rf" ]] && continue
   name=$(basename "$rf")
   if download "$rf" "$BACKUPS_DIR/clients/$name"; then
@@ -475,7 +481,7 @@ while IFS= read -r rf; do
       log "  Saved backups/clients/$name"
     fi
   fi
-done < <($SSH -- "sudo sh -c 'ls /etc/xray/clients/*.uuid /etc/xray/clients/*.txt 2>/dev/null || true'")
+done 3< <($SSH -- "sudo sh -c 'ls /etc/xray/clients/*.uuid /etc/xray/clients/*.txt 2>/dev/null || true'")
 
 log ""
 log "Provisioning complete."

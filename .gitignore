@@ -25,3 +25,9 @@ docs/postmortems/*.md
 .vulnhunter-fix/
 __pycache__/
 graphify-out/
+
+# vulnhunter
+claude-conduit_VULNHUNT_RESULTS_2026-08-06-095038
+verify-2026-08-11
+verify-2026-08-13
+

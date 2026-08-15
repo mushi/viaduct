@@ -119,6 +119,26 @@ class KmsScopeTest(unittest.TestCase):
                 "kms:UpdateAlias is in a conditioned statement; on rotation the target key "
                 "has no alias yet, so the condition denies it and the server crash-loops")
 
+    def test_schedule_key_deletion_is_tag_scoped_not_alias_scoped(self):
+        """Regression: ScheduleKeyDeletion conditioned on kms:ResourceAliases cannot prune.
+        SPIRE repoints a key's alias to its replacement BEFORE pruning the old key, so the
+        orphaned key carries no SPIRE_SERVER/ alias and an alias condition matches nothing
+        — the prune is denied and superseded keys linger. It must be scoped by kms:ResourceTag
+        (a tag survives the alias move), still conditioned (never blanket Resource "*")."""
+        granting = [s for s in self.stmts if "kms:ScheduleKeyDeletion" in actions_of(s)]
+        self.assertTrue(granting, "kms:ScheduleKeyDeletion not granted — SPIRE cannot prune "
+                                  "rotated keys and they accrue cost indefinitely")
+        for stmt in granting:
+            self.assertIn("Condition", stmt,
+                          "ScheduleKeyDeletion is unconditioned on Resource \"*\": the instance "
+                          "role could schedule deletion of any KMS key in the account")
+            self.assertIn("kms:ResourceTag/", stmt,
+                          "ScheduleKeyDeletion is not tag-scoped")
+            self.assertNotIn(
+                "kms:ResourceAliases", stmt,
+                "ScheduleKeyDeletion is alias-scoped; a rotated key's alias has already moved, "
+                "so the prune is denied and orphaned keys linger (the pruning bug)")
+
     def test_spire_can_still_create_and_sign(self):
         """The fix must not break SPIRE's normal operation."""
         all_actions = set()
@@ -127,6 +147,37 @@ class KmsScopeTest(unittest.TestCase):
         for needed in ("kms:CreateKey", "kms:Sign", "kms:DescribeKey", "kms:ListKeys"):
             self.assertIn(needed, all_actions,
                           f"{needed} was dropped; the SPIRE KMS KeyManager would break")
+
+
+class KmsTagSyncTest(unittest.TestCase):
+    """The tag that scopes ScheduleKeyDeletion in the IAM policy must be exactly the tag
+    SPIRE stamps on the keys it creates. If they drift, SPIRE's keys don't carry the tag
+    the policy requires and every prune is silently denied — the pruning bug returns with
+    no error at apply time. This pins the two together across the two files."""
+
+    STARTUP_TPL = REPO_ROOT / "aws" / "scripts" / "startup.sh.tpl"
+
+    def test_iam_resourcetag_matches_spire_key_tags(self):
+        policy = MAIN_TF.read_text()
+        m = re.search(r'"kms:ResourceTag/([^"]+)"\s*=\s*"([^"]+)"', policy)
+        self.assertIsNotNone(
+            m, "no kms:ResourceTag condition in the KMS policy; ScheduleKeyDeletion is no "
+               "longer tag-scoped")
+        iam_key, iam_val = m.group(1), m.group(2)
+
+        tpl = self.STARTUP_TPL.read_text()
+        block = re.search(r"key_tags\s*=\s*\{(.*?)\}", tpl, re.S)
+        self.assertIsNotNone(
+            block, "the aws_kms KeyManager sets no key_tags, so SPIRE tags none of its keys "
+                   "and the IAM ResourceTag condition can never match — pruning stays broken")
+        pair = re.search(r'"([^"]+)"\s*=\s*"([^"]+)"', block.group(1))
+        self.assertIsNotNone(pair, "key_tags block has no \"key\" = \"value\" entry")
+        tpl_key, tpl_val = pair.group(1), pair.group(2)
+
+        self.assertEqual(
+            (iam_key, iam_val), (tpl_key, tpl_val),
+            f"IAM condition tags kms:ResourceTag/{iam_key}={iam_val!r} but SPIRE stamps "
+            f"{tpl_key}={tpl_val!r}; they must match or every ScheduleKeyDeletion is denied")
 
 
 if __name__ == "__main__":
