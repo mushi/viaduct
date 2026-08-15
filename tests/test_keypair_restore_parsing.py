@@ -18,6 +18,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TPL = REPO_ROOT / "cloud-init.yaml.tpl"
+GUARDS = REPO_ROOT / "scripts" / "lib" / "provision-guards.sh"
+PROVISION = REPO_ROOT / "scripts" / "provision.sh"
 
 GOOD = "PRIVATE_KEY=aPrivateKeyValue\nPUBLIC_KEY=aPublicKeyValue\nSHORT_ID=0123456789abcdef\n"
 
@@ -96,6 +98,75 @@ class KeypairRestoreTest(unittest.TestCase):
         p = run_loader(payload)
         self.assertNotIn("malicious", p.stdout,
                          "an unexpected key from the backup was imported")
+
+
+# ── VULN-031 (restored client UUID) ──────────────────────────────────────────
+# Same finding, sibling sink: a restored per-user .uuid is rendered into config.json
+# and every client URI. A value that closes the JSON string ("…","flow":"attacker)
+# injects config. Folded here from the retired test_verify_followup_gaps.py.
+
+def uncommented(text: str) -> str:
+    return "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+
+
+class RestoredUuidTest(unittest.TestCase):
+    """The re-imported UUID must be shape-checked before it reaches config.json."""
+
+    @staticmethod
+    def fragment() -> str:
+        body = render(TPL.read_text())
+        start = body.rindex("\n", 0, body.index('USER_UUID=$(cat "$UUID_FILE")')) + 1
+        # Through the end of the validation block so the extracted shell is self-contained.
+        end = body.index("\n", body.index("Remove the file to mint a new one", start))
+        end = body.index("\n", body.index("fi", end)) + 1
+        return dedent(body[start:end])
+
+    def run_with(self, contents: str):
+        tmp = Path(tempfile.mkdtemp())
+        f = tmp / "user1.uuid"; f.write_text(contents)
+        return subprocess.run(
+            ["bash", "-c", f'UUID_FILE="{f}"\nUSERNAME=user1\n' + self.fragment() +
+             '\nprintf "ACCEPTED=%s" "$USER_UUID"\n'],
+            capture_output=True, text=True, timeout=30)
+
+    def test_a_genuine_uuid_is_accepted(self):
+        p = self.run_with("11111111-2222-3333-4444-555555555555\n")
+        self.assertEqual(p.returncode, 0, f"a valid backup was rejected: {p.stderr}")
+        self.assertIn("ACCEPTED=11111111-2222-3333-4444-555555555555", p.stdout)
+
+    def test_an_injected_value_is_refused(self):
+        payload = '11111111-2222-3333-4444-555555555555", "flow": "attacker'
+        p = self.run_with(payload + "\n")
+        self.assertNotEqual(p.returncode, 0, "a value that closes the JSON string was accepted")
+        self.assertNotIn("ACCEPTED=" + payload, p.stdout)
+
+    def test_a_non_uuid_is_refused(self):
+        p = self.run_with("not-a-uuid\n")
+        self.assertNotEqual(p.returncode, 0, "a non-UUID was rendered into the config")
+
+
+class UuidGuardAndRoundTripTest(unittest.TestCase):
+    def guard(self, value: str):
+        return subprocess.run(
+            ["bash", "-c", f'. "{GUARDS}"\nvh_is_uuid {value!r} && echo OK || echo REJECT'],
+            capture_output=True, text=True)
+
+    def test_the_guard_discriminates(self):
+        self.assertIn("OK", self.guard("11111111-2222-3333-4444-555555555555").stdout)
+        for bad in ("", "not-a-uuid", '1111"; rm -rf /', "11111111-2222-3333-4444"):
+            with self.subTest(value=bad):
+                self.assertIn("REJECT", self.guard(bad).stdout, f"vh_is_uuid accepted {bad!r}")
+
+    def test_both_ends_of_the_round_trip_call_it(self):
+        """The provisioner validates the UUID both when it pushes a backup up and when it
+        stores what the node hands back — a planted value must not survive either leg."""
+        body = uncommented(PROVISION.read_text())
+        upload_side = body[body.index("Uploading"): body.index('upload "$f"')]
+        self.assertIn("vh_is_uuid", upload_side,
+                      "a planted UUID is still pushed back to the node unvalidated")
+        download_side = body[body.index('download "$rf"'): body.index("Provisioning complete")]
+        self.assertIn("vh_is_uuid", download_side,
+                      "what the node hands back is still stored unvalidated")
 
 
 if __name__ == "__main__":

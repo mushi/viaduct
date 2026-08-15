@@ -10,13 +10,19 @@ there. These tests execute the emitted fragment to confirm both the success and 
 lookup-failure paths.
 """
 
+import os
 import re
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TPL = REPO_ROOT / "cloud-init.yaml.tpl"
+
+
+def render(body: str) -> str:
+    return body.replace("$${", "${").replace("%%{", "%{")
 
 
 def self_rule_fragment() -> str:
@@ -30,9 +36,30 @@ def self_rule_fragment() -> str:
     return "\n".join(l[indent:] for l in lines)
 
 
+def ipv6_rule_fragment() -> str:
+    """The shell that discovers the node's global IPv6 and builds SELF_IP6_RULE."""
+    lines = render(TPL.read_text()).splitlines()
+    start = next(i for i, l in enumerate(lines) if "SERVER_IPV6=$(ip -6" in l)
+    end = next(i for i in range(start, len(lines)) if lines[i].strip() == "fi")
+    frag = lines[start:end + 1]
+    indent = min(len(l) - len(l.lstrip()) for l in frag if l.strip())
+    return "\n".join(l[indent:] for l in frag)
+
+
 def build_rule(server_ip: str) -> str:
     script = f'SERVER_IP={server_ip!r}\n' + self_rule_fragment() + '\nprintf "%s" "$SELF_IP_RULE"\n'
     return subprocess.run(["bash", "-c", script], capture_output=True, text=True).stdout
+
+
+def build_ipv6_rule(ip_show_output: str) -> str:
+    """Run the real fragment with a stubbed `ip` emitting the given `ip -6 addr show`."""
+    with tempfile.TemporaryDirectory() as tmp:
+        binp = Path(tmp) / "bin"; binp.mkdir()
+        (binp / "ip").write_text("#!/usr/bin/env bash\ncat <<'OUT'\n" + ip_show_output + "\nOUT\n")
+        (binp / "ip").chmod(0o755)
+        env = dict(os.environ, PATH=f"{binp}:{os.environ['PATH']}")
+        script = ipv6_rule_fragment() + '\nprintf "%s" "$SELF_IP6_RULE"\n'
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env).stdout
 
 
 class SelfAddressBlockTest(unittest.TestCase):
@@ -62,6 +89,33 @@ class SelfAddressBlockTest(unittest.TestCase):
         body = TPL.read_text()
         self.assertIn('"10.0.0.0/8"', body, "the RFC-1918 block was lost")
         self.assertIn('"127.0.0.0/8"', body, "the loopback block was lost")
+
+
+class SelfAddressIpv6BlockTest(unittest.TestCase):
+    """VULN-038 (IPv6 half): Hetzner assigns a routable global v6 by default, so the
+    node's own v6 must be blocked too, or a VLESS user could dial [<node-v6>]:22."""
+
+    def test_global_ipv6_is_blocked_as_a_128(self):
+        out = build_ipv6_rule("    inet6 2a01:4f8:1:2::3/64 scope global\n"
+                              "    inet6 fe80::1/64 scope link")
+        self.assertIn("2a01:4f8:1:2::3/128", out,
+                      "the node's own global IPv6 is not added to the routing blocklist")
+        self.assertIn('"outboundTag": "block"', out,
+                      "the self-IPv6 rule does not route to the block outbound")
+
+    def test_no_global_ipv6_emits_no_rule(self):
+        """A node with no global v6: `ip -6 addr show scope global` returns nothing, so no
+        rule must render (not a broken "/128")."""
+        out = build_ipv6_rule("")
+        self.assertEqual(out.strip(), "",
+                         f"a node without a global IPv6 still produced a rule: {out!r}")
+        self.assertNotIn("/128", out)
+
+    def test_rule_is_interpolated_into_the_routing_rules(self):
+        routing = TPL.read_text()
+        routing = routing[routing.index('"routing"'):]
+        self.assertIn("$SELF_IP6_RULE", routing[:2000],
+                      "the self-IPv6 rule is never interpolated into the routing rules")
 
 
 if __name__ == "__main__":

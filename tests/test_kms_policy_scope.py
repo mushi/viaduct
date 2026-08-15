@@ -139,6 +139,18 @@ class KmsScopeTest(unittest.TestCase):
                 "ScheduleKeyDeletion is alias-scoped; a rotated key's alias has already moved, "
                 "so the prune is denied and orphaned keys linger (the pruning bug)")
 
+    def test_sign_is_alias_scoped_not_account_wide(self):
+        """VULN-018: kms:Sign unscoped let the instance role sign with every asymmetric
+        KMS key in the account. SPIRE aliases a key before it ever signs with it, so Sign
+        must sit in the kms:ResourceAliases-conditioned statement (alias/SPIRE_SERVER/*)."""
+        granting = [s for s in self.stmts if "kms:Sign" in actions_of(s)]
+        self.assertTrue(granting, "kms:Sign disappeared from the policy entirely")
+        for stmt in granting:
+            self.assertIn("kms:ResourceAliases", stmt,
+                          "kms:Sign is in an unconditioned statement, so the role can sign "
+                          "with every asymmetric KMS key in the account")
+            self.assertIn("alias/SPIRE_SERVER/", stmt)
+
     def test_spire_can_still_create_and_sign(self):
         """The fix must not break SPIRE's normal operation."""
         all_actions = set()
