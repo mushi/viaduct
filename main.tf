@@ -183,6 +183,7 @@ resource "null_resource" "provision" {
     interpreter = ["/usr/bin/env", "bash"]
     environment = {
       SERVER_IP    = hcloud_server.conduit.ipv4_address
+      SERVER_ID    = hcloud_server.conduit.id
       SSH_KEY_PATH = var.ssh_private_key_path
       BACKUPS_DIR  = "${path.module}/backups"
       USERS_FILE   = local_file.users_txt.filename
