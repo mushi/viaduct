@@ -4,6 +4,7 @@
 # Executed locally by Terraform's null_resource.provision via local-exec.
 # Environment variables set by Terraform:
 #   SERVER_IP    — public IPv4 of the server
+#   SERVER_ID    — hcloud server id (used to detect a genuine rebuild)
 #   SSH_KEY_PATH — local path to the SSH private key
 #   BACKUPS_DIR  — local path to the backups/ directory
 #   USERS_FILE   — local path to the generated users.txt
@@ -58,11 +59,20 @@ log()    { echo "[provision] $*"; }
 # in cloud-init). deploy has NOPASSWD sudo, so privileged work is `sudo`-wrapped.
 remote() { $SSH -- sudo "$@"; }
 
+# Shared host-key / rebuild-detection helpers.
+# shellcheck source=lib/provision-guards.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/provision-guards.sh"
+
 upload() {
   local src="$1" dst="$2" perms="${3:-0644}"
   # deploy can't write system paths directly; stage in /tmp, then install as root.
+  # $$ plus the known basename made the old /tmp/prov.$$.<name> path guessable by
+  # any local account on the target: a file or symlink pre-created there receives
+  # the uploaded content — which includes keypair.env and client UUIDs. Let the
+  # remote side pick an unpredictable, mode-0600 name instead.
   local stage
-  stage="/tmp/prov.$$.$(basename "$dst")"
+  stage="$($SSH -- 'umask 077; mktemp /tmp/prov.XXXXXXXXXX')"
+  [ -n "$stage" ] || { log "ERROR: could not create a staging file on ${SERVER_IP}"; return 1; }
   $SCP "$src" "deploy@${SERVER_IP}:${stage}"
   remote install -m "$perms" "$stage" "$dst"
   $SSH -- rm -f "$stage"
@@ -72,8 +82,10 @@ upload() {
 download() {
   local src="$1" dst="$2"
   # Sources are root-owned/0600 → read via sudo cat. Stage to .partial so a
-  # missing source never leaves a truncated file in backups/.
-  if remote cat "$src" > "$dst.partial" 2>/dev/null; then
+  # missing source never leaves a truncated file in backups/. Create the partial
+  # private: a redirect at the ambient umask leaves retrieved key material
+  # world-readable on the operator workstation until the chmod lands.
+  if ( umask 077; remote cat "$src" > "$dst.partial" 2>/dev/null ); then
     mv "$dst.partial" "$dst"
     chmod 600 "$dst"
   else
@@ -93,11 +105,17 @@ download() {
 #      connection is already up), and it's bounded so a *hung* cloud-init
 #      (status stuck 'running', sentinel never written) can't stall for ~an hour.
 
-# A `terraform -replace` rebuild keeps the static IP but regenerates the SSH
-# host keys. Drop any stale key for this IP from our dedicated known_hosts so
-# the SSH below can accept-new the fresh key instead of hard-failing on a
-# changed host key (StrictHostKeyChecking=accept-new rejects *changed* keys).
-ssh-keygen -R "${SERVER_IP}" -f "${BACKUPS_DIR}/known_hosts" >/dev/null 2>&1 || true
+# A `terraform -replace` rebuild keeps the static IP but regenerates the SSH host
+# keys, so the stale pin has to go before the SSH below can accept-new the fresh
+# one. But clearing it on EVERY apply (as this used to) lets accept-new re-trust
+# whatever key answers — defeating the one check that catches an on-path attacker.
+# So clear it only when the box was genuinely rebuilt: SERVER_ID (the hcloud server
+# id, from terraform state) changed since it was last recorded, an unforgeable
+# rebuild signal. A changed key NOT backed by a new id (the MITM case) is left
+# pinned and fails closed in Phase A below. VIADUCT_HOST_KEY_RESET=1 forces the
+# reset for an out-of-band key change that kept the same id (e.g. an OS reinstall).
+vh_reset_host_key_pin_if_requested "${SERVER_IP}" "${BACKUPS_DIR}/known_hosts" \
+  "${SERVER_ID:-}" "${BACKUPS_DIR}/known_hosts.serverid"
 
 # ── Phase A: wait for SSH to succeed (bounded ~10 min); establishes the master.
 log "Waiting for ${SERVER_IP} to accept SSH (up to 10 min)..."
@@ -122,6 +140,10 @@ until ssh_err=$($SSH -- true 2>&1); do
   sleep 10
 done
 log "SSH established."
+
+# The pin now belongs to this instance. Record its id so the next run can tell a
+# genuine rebuild (id changed) from an ordinary apply, and NOT clear the pin then.
+vh_record_server_id "${SERVER_ID:-}" "${BACKUPS_DIR}/known_hosts.serverid"
 
 # ── Phase B: wait for cloud-init to finish (fast iterations; the master is up).
 log "Waiting for cloud-init to finish (up to 10 min)..."
@@ -245,13 +267,18 @@ fi
 # Per-user .uuid and .txt files
 # Use a single remote command to list them, then download each over the
 # existing multiplexed connection.
-while IFS= read -r rf; do
+#
+# The list is read on FD 3, not stdin: download() runs `ssh` (via remote cat), and
+# ssh with an inherited stdin would read the rest of this list itself — draining the
+# pipe so the loop stops after the first file, silently backing up only the first
+# client. Keeping the list on FD 3 leaves the inner ssh's stdin alone.
+while IFS= read -r rf <&3; do
   [[ -z "$rf" ]] && continue
   name=$(basename "$rf")
   if download "$rf" "$BACKUPS_DIR/clients/$name"; then
     log "  Saved backups/clients/$name"
   fi
-done < <($SSH -- "sudo sh -c 'ls /etc/xray/clients/*.uuid /etc/xray/clients/*.txt 2>/dev/null || true'")
+done 3< <($SSH -- "sudo sh -c 'ls /etc/xray/clients/*.uuid /etc/xray/clients/*.txt 2>/dev/null || true'")
 
 log ""
 log "Provisioning complete."
