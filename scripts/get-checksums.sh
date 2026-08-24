@@ -86,12 +86,16 @@ CONDUIT_VERSION=$(get_var "conduit_version"            "release-cli-2.0.0")
 XRAY_VERSION=$(get_var "xray_version"                  "v26.4.25")
 ALLOY_VERSION=$(get_var "alloy_version"                "v1.8.3")
 XRAY_EXPORTER_VERSION=$(get_var "xray_exporter_version" "v0.2.0")
+GEOIP_VERSION=$(get_var "geoip_version"                "202608050239")
+GEOSITE_VERSION=$(get_var "geosite_version"            "20260807145230")
 
 echo "Fetching digests from the GitHub Releases API:"
 echo "  conduit          $CONDUIT_VERSION"
 echo "  xray-core        $XRAY_VERSION"
 echo "  grafana-alloy    $ALLOY_VERSION"
 echo "  xray-exporter    $XRAY_EXPORTER_VERSION"
+echo "  geoip.dat        $GEOIP_VERSION"
+echo "  geosite (dlc)    $GEOSITE_VERSION"
 echo ""
 
 CONDUIT_SHA256=$(api_digest "Psiphon-Inc/conduit"           "$CONDUIT_VERSION"       "conduit-linux-amd64")
@@ -107,12 +111,25 @@ if [[ -z "$ALLOY_ZIP_SHA256" ]]; then
     | awk '/alloy-linux-amd64\.zip/ {print $1; exit}' || true)
 fi
 
+# geoip.dat / dlc.dat: prefer the API digest; data-file assets often lack one, so fall
+# back to downloading and hashing the file ourselves (still a point-in-time recorded pin).
+hash_release_asset() {  # repo tag asset -> bare sha256
+  curl -fsSL "https://github.com/$1/releases/download/$2/$3" 2>/dev/null \
+    | sha256sum | awk '{print $1}'
+}
+GEOIP_SHA256=$(api_digest "v2fly/geoip" "$GEOIP_VERSION" "geoip.dat")
+[[ -z "$GEOIP_SHA256" ]] && GEOIP_SHA256=$(hash_release_asset "v2fly/geoip" "$GEOIP_VERSION" "geoip.dat")
+GEOSITE_SHA256=$(api_digest "v2fly/domain-list-community" "$GEOSITE_VERSION" "dlc.dat")
+[[ -z "$GEOSITE_SHA256" ]] && GEOSITE_SHA256=$(hash_release_asset "v2fly/domain-list-community" "$GEOSITE_VERSION" "dlc.dat")
+
 # ── Fail loudly if any pin is still empty ─────────────────────────────────────
 missing=""
 [[ -z "$CONDUIT_SHA256" ]]       && missing+=" conduit"
 [[ -z "$XRAY_ZIP_SHA256" ]]      && missing+=" xray"
 [[ -z "$ALLOY_ZIP_SHA256" ]]     && missing+=" alloy"
 [[ -z "$XRAY_EXPORTER_SHA256" ]] && missing+=" xray-exporter"
+[[ -z "$GEOIP_SHA256" ]]         && missing+=" geoip"
+[[ -z "$GEOSITE_SHA256" ]]       && missing+=" geosite"
 if [[ -n "$missing" ]]; then
   echo "ERROR: no digest found for:$missing" >&2
   echo "  Check the version/asset name. If the asset predates GitHub-computed" >&2
@@ -131,5 +148,7 @@ echo "conduit_sha256       = \"$CONDUIT_SHA256\""
 echo "xray_zip_sha256      = \"$XRAY_ZIP_SHA256\""
 echo "alloy_zip_sha256     = \"$ALLOY_ZIP_SHA256\""
 echo "xray_exporter_sha256 = \"$XRAY_EXPORTER_SHA256\""
+echo "geoip_sha256         = \"$GEOIP_SHA256\""
+echo "geosite_sha256       = \"$GEOSITE_SHA256\""
 echo ""
 echo "══════════════════════════════════════════════════════════════"

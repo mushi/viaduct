@@ -159,3 +159,31 @@ variable "alloy_zip_sha256" {
   description = "SHA-256 of alloy-linux-amd64.zip for the pinned alloy_version. Run scripts/get-checksums.sh to obtain."
   type        = string
 }
+
+# Xray geo data (geoip.dat / geosite.dat). Pinned to a release TAG and verified on
+# the node against the digest recorded here — NOT a .sha256sum fetched from the same
+# release path, which proves transport integrity only. Defaults are a known-good pair;
+# run scripts/get-checksums.sh after bumping a *_version to refresh the matching digest.
+variable "geoip_version" {
+  description = "Pinned v2fly/geoip release tag providing geoip.dat."
+  type        = string
+  default     = "202608050239"
+}
+
+variable "geoip_sha256" {
+  description = "SHA-256 of geoip.dat from the pinned v2fly/geoip release. Run scripts/get-checksums.sh to obtain."
+  type        = string
+  default     = "c67bd077eb102cec74fab759b73d17f99275f56af10a87c14d9fd983508f5ce1"
+}
+
+variable "geosite_version" {
+  description = "Pinned v2fly/domain-list-community release tag providing dlc.dat (installed as geosite.dat)."
+  type        = string
+  default     = "20260807145230"
+}
+
+variable "geosite_sha256" {
+  description = "SHA-256 of dlc.dat from the pinned v2fly/domain-list-community release. Run scripts/get-checksums.sh to obtain."
+  type        = string
+  default     = "c383bc2487049f2bd49a54806c178098b990b08d4b1716140f9f9c86e7f15c71"
+}

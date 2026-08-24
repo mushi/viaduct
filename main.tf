@@ -119,6 +119,10 @@ resource "hcloud_server" "conduit" {
     xray_exporter_sha256  = var.xray_exporter_sha256
     alloy_version         = var.alloy_version
     alloy_zip_sha256      = var.alloy_zip_sha256
+    geoip_version         = var.geoip_version
+    geoip_sha256          = var.geoip_sha256
+    geosite_version       = var.geosite_version
+    geosite_sha256        = var.geosite_sha256
     ssh_public_key        = var.ssh_public_key
     ops_ssh_public_key    = var.ops_ssh_public_key
   })
