@@ -829,7 +829,11 @@ runcmd:
         ssl_certificate     /etc/letsencrypt/live/${vless_domain}/fullchain.pem;
         ssl_certificate_key /etc/letsencrypt/live/${vless_domain}/privkey.pem;
         ssl_protocols       TLSv1.2 TLSv1.3;
-        ssl_ciphers         HIGH:!aNULL:!MD5;
+        # HIGH still admits static-RSA key exchange (no forward secrecy) and CBC
+        # suites. Name the ECDHE AEAD suites explicitly instead; every modern client
+        # negotiates one of these, and TLS 1.3 suite selection is unaffected.
+        ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+        ssl_prefer_server_ciphers on;
         ssl_session_cache   shared:SSL:10m;
         ssl_session_timeout 10m;
 
@@ -837,6 +841,11 @@ runcmd:
             proxy_pass         http://127.0.0.1:10000;
             proxy_http_version 1.1;
             proxy_set_header   Host $host;
+            # XHTTP is a long-poll transport, so the upstream read timeout stays
+            # generous. No per-client connection/request caps here on purpose: this
+            # is the censorship-circumvention data path and its users are commonly
+            # behind carrier-grade NAT (many users share one source IP), so per-IP
+            # limits would throttle legitimate traffic rather than only abuse.
             proxy_read_timeout 86400s;
             proxy_buffering    off;
         }
