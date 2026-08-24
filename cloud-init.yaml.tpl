@@ -479,8 +479,28 @@ write_files:
         chmod 600 "$KEYPAIR_FILE"
         echo "Generated new Reality keypair."
       else
-        # shellcheck source=/dev/null
-        source "$KEYPAIR_FILE"
+        # Parse, never source. `source` executes the backup as shell, so a tampered or
+        # merely corrupted keypair.env would run arbitrary commands as root on a freshly
+        # replaced node — at the exact moment the operator is trusting the restore path.
+        # Read only the three expected keys, and only when the line has the exact
+        # KEY=value shape; anything else is ignored rather than evaluated.
+        PRIVATE_KEY=""; PUBLIC_KEY=""; SHORT_ID=""
+        while IFS= read -r kp_line || [ -n "$kp_line" ]; do
+          case "$kp_line" in
+            PRIVATE_KEY=*) kp_val="$${kp_line#PRIVATE_KEY=}" ; kp_name=PRIVATE_KEY ;;
+            PUBLIC_KEY=*)  kp_val="$${kp_line#PUBLIC_KEY=}"  ; kp_name=PUBLIC_KEY  ;;
+            SHORT_ID=*)    kp_val="$${kp_line#SHORT_ID=}"    ; kp_name=SHORT_ID    ;;
+            *) continue ;;
+          esac
+          # Values are base64/hex key material; reject anything outside that charset so a
+          # crafted value cannot survive into the rendered config or client URIs.
+          case "$kp_val" in
+            *[!A-Za-z0-9+/=_-]*|"")
+              echo "ERROR: $KEYPAIR_FILE contains a malformed $kp_name value; refusing to restore." >&2
+              exit 1 ;;
+          esac
+          printf -v "$kp_name" '%s' "$kp_val"
+        done < "$KEYPAIR_FILE"
         echo "Loaded existing Reality keypair."
         if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" || -z "$SHORT_ID" ]]; then
           echo "ERROR: $KEYPAIR_FILE is missing PRIVATE_KEY, PUBLIC_KEY, or SHORT_ID — restore from backup or delete the file to generate a fresh keypair." >&2
@@ -488,8 +508,41 @@ write_files:
         fi
       fi
 
-      SERVER_IP=$(curl -fsSL --max-time 5 https://api4.my-ip.io/ip.json \
-                  | jq -r '.ip' 2>/dev/null || hostname -I | awk '{print $1}')
+      # This node's public IP is not known at plan time, so the box discovers it at
+      # boot. Several unauthenticated third parties are tried in turn — one being down
+      # (as api4.my-ip.io was) no longer wedges the whole setup. Every candidate is
+      # interpolated into config.json and the client URIs, so each is format-validated
+      # before use; a hostile or MITM'd reply cannot inject. A wrong-but-well-formed
+      # value is the residual risk, unchanged from a single-endpoint lookup.
+      vh_is_ipv4() {
+        [[ "$${1:-}" =~ ^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$ ]]
+      }
+
+      SERVER_IP=""
+      for url in https://api.ipify.org https://icanhazip.com https://ifconfig.me/ip https://checkip.amazonaws.com; do
+        cand=$(curl -4 -fsSL --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]')
+        if vh_is_ipv4 "$cand"; then SERVER_IP="$cand"; break; fi
+      done
+
+      if [ -z "$SERVER_IP" ]; then
+        # Every lookup failed. Fall back to a PUBLIC address on this host — never a
+        # private one: hostname -I would list any private/tunnel address too, and
+        # rendering that into the client URIs would hand out a dead server address.
+        echo "xray-setup: public IP lookup failed on all endpoints; trying a public host address." >&2
+        for cand in $(hostname -I); do
+          vh_is_ipv4 "$cand" || continue
+          case "$cand" in
+            10.*|127.*|169.254.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*) continue ;;
+          esac
+          SERVER_IP="$cand"; break
+        done
+      fi
+
+      if ! vh_is_ipv4 "$SERVER_IP"; then
+        echo "ERROR: could not determine a public IPv4 address for this node." >&2
+        echo "       Refusing to render config.json and client URIs around an unvalidated value." >&2
+        exit 1
+      fi
 
       # ── Per-user UUIDs and Xray clients JSON ─────────────────────────────
       CLIENTS_JSON_REALITY=""
@@ -503,6 +556,15 @@ write_files:
 
         if [[ -f "$UUID_FILE" ]]; then
           USER_UUID=$(cat "$UUID_FILE")
+          # Restored from backup, so it is whatever the previous node wrote — and it
+          # is interpolated into config.json and into every generated client URI.
+          # Refuse rather than regenerate: silently minting a new UUID would revoke a
+          # working client without telling anyone.
+          if [[ ! "$USER_UUID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+            echo "ERROR: $UUID_FILE does not contain a UUID; refusing to render it into" >&2
+            echo "       config.json and the client URIs. Remove the file to mint a new one." >&2
+            exit 1
+          fi
           echo "Reusing UUID for: $USERNAME"
         else
           USER_UUID=$(/usr/local/bin/xray uuid)
