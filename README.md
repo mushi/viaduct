@@ -1,3 +1,4 @@
+[![Regression Tests](https://github.com/mushi/viaduct/actions/workflows/main.yml/badge.svg)](https://github.com/mushi/viaduct/actions/workflows/main.yml)
 # Viaduct - Conduit + VLESS Station on Hetzner Cloud (Terraform)
 
 ## What
