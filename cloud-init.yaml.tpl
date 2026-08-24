@@ -491,6 +491,27 @@ write_files:
       SERVER_IP=$(curl -fsSL --max-time 5 https://api4.my-ip.io/ip.json \
                   | jq -r '.ip' 2>/dev/null || hostname -I | awk '{print $1}')
 
+      # ── Self-address routing block ───────────────────────────────────────
+      # Block traffic destined for this node's own public addresses so an
+      # authenticated VLESS user cannot use the proxy as a confused deputy to
+      # reach the node's own :80 / :8443 / sshd as though from outside. Emitted
+      # only when the address is well-formed — an empty or malformed value would
+      # render "/32" (or "/128") and make Xray fail to parse its config.
+      # hcloud_server has no public_net block, so a routable IPv6 is assigned by
+      # default and needs the same treatment.
+      SERVER_IPV6=$(ip -6 addr show scope global 2>/dev/null \
+                    | awk '/inet6/ {print $2}' | cut -d/ -f1 | head -n1)
+      SELF_IP6_RULE=""
+      if [[ "$${SERVER_IPV6:-}" =~ ^[0-9a-fA-F:]+$ ]]; then
+        SELF_IP6_RULE="            { \"type\": \"field\", \"ip\": [\"$SERVER_IPV6/128\"], \"outboundTag\": \"block\" },"
+      fi
+      SELF_IP_RULE=""
+      if printf '%s' "$SERVER_IP" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then
+        SELF_IP_RULE="            { \"type\": \"field\", \"ip\": [\"$SERVER_IP/32\"], \"outboundTag\": \"block\" },"
+      else
+        echo "xray-setup: WARNING - could not determine a valid public IP; the self-address routing block is omitted" >&2
+      fi
+
       # ── Per-user UUIDs and Xray clients JSON ─────────────────────────────
       CLIENTS_JSON_REALITY=""
       CLIENTS_JSON_XHTTP=""
@@ -686,7 +707,9 @@ write_files:
           "rules": [
             { "type": "field", "inboundTag": ["api"],        "outboundTag": "api" },
             { "type": "field", "inboundTag": ["metrics_in"], "outboundTag": "direct" },
-            { "type": "field", "ip": ["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","127.0.0.0/8","169.254.0.0/16","100.64.0.0/10","fc00::/7","::1/128"], "outboundTag": "block" },
+            $SELF_IP_RULE
+            $SELF_IP6_RULE
+            { "type": "field", "ip": ["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","127.0.0.0/8","169.254.0.0/16","100.64.0.0/10","fc00::/7","::1/128","fe80::/10"], "outboundTag": "block" },
             { "type": "field", "ip": ["geoip:ir"], "outboundTag": "block" },
             { "type": "field", "domain": ["geosite:category-ir"], "outboundTag": "block" }
           ]
