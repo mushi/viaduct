@@ -1,104 +1,1122 @@
 {
-  "annotations": { "list": [] },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "name": "Annotations & Alerts",
+        "type": "dashboard",
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "enable": true,
+        "hide": true
+      }
+    ]
+  },
   "editable": true,
   "graphTooltip": 1,
-  "time": { "from": "now-1h", "to": "now" },
-  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "1m",
   "schemaVersion": 39,
-  "title": "Viaduct — Fleet Logs",
+  "title": "Viaduct \u2014 Fleet Logs",
   "uid": "viaduct-fleet-logs",
-  "tags": ["viaduct", "logs", "loki"],
+  "tags": [
+    "viaduct",
+    "logs",
+    "loki",
+    "security"
+  ],
+  "timezone": "browser",
   "templating": {
     "list": [
       {
         "type": "datasource",
         "name": "DS_LOKI",
-        "label": "Loki datasource",
+        "label": "Loki",
         "query": "loki",
         "hide": 0,
         "current": {},
-        "refresh": 1
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false
       },
       {
         "type": "query",
         "name": "node",
         "label": "Node",
-        "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+        "datasource": {
+          "type": "loki",
+          "uid": "${DS_LOKI}"
+        },
         "query": "label_values(node)",
         "refresh": 2,
         "multi": true,
         "includeAll": true,
         "allValue": ".+",
-        "current": { "text": "All", "value": "$__all" }
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "sort": 1,
+        "definition": "label_values(node)",
+        "hide": 0,
+        "options": [],
+        "skipUrlSync": false
+      },
+      {
+        "type": "query",
+        "name": "unit",
+        "label": "Unit",
+        "datasource": {
+          "type": "loki",
+          "uid": "${DS_LOKI}"
+        },
+        "query": "label_values({node=~\"$node\"}, unit)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "sort": 1,
+        "definition": "label_values({node=~\"$node\"}, unit)",
+        "hide": 0,
+        "options": [],
+        "skipUrlSync": false
       },
       {
         "type": "query",
         "name": "level",
         "label": "Level",
-        "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+        "datasource": {
+          "type": "loki",
+          "uid": "${DS_LOKI}"
+        },
         "query": "label_values(level)",
         "refresh": 2,
         "multi": true,
         "includeAll": true,
-        "allValue": ".+",
-        "current": { "text": "All", "value": "$__all" }
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "sort": 1,
+        "definition": "label_values(level)",
+        "hide": 0,
+        "options": [],
+        "skipUrlSync": false
       },
       {
         "type": "textbox",
         "name": "search",
-        "label": "Search (regex, case-insensitive)",
+        "label": "Search",
         "query": "",
-        "current": { "text": "", "value": "" }
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "hide": 0,
+        "options": [],
+        "skipUrlSync": false
       }
     ]
   },
   "panels": [
     {
-      "id": 1,
-      "title": "Log volume by node",
-      "type": "timeseries",
-      "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
-      "fieldConfig": {
-        "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 40, "stacking": { "mode": "normal" } }, "unit": "short" },
-        "overrides": []
+      "type": "text",
+      "title": "",
+      "transparent": true,
+      "options": {
+        "mode": "markdown",
+        "content": "## Viaduct \u2014 Fleet Logs\nEvery node ships journald to Grafana Cloud Loki via Alloy, tagged `node`, `unit` and `level`. Three trust domains, three clouds, one query surface.\n\n**Read it top-down:** pipeline liveness \u2192 what the logs cost \u2192 the identity and secrets plane (this lab's whole reason to exist) \u2192 the data plane \u2192 who touched what.\n\n**Deliberately absent:** panels built on `conduit.service` `[STATS]` lines. They are ~96% of the Hetzner node's log volume and duplicate the `conduit_*` Prometheus series \u2014 and the log copy is *truncated* (`(+39 more...)`), so `conduit_region_*` is strictly better. Read throughput and per-region breakdown on the ops dashboard; this one shows what those lines **cost** instead.\n\n*Panels scoped to one node (Vault, k3s, egress guardrail) go empty if `$node` excludes it \u2014 that is honest, not broken.*"
       },
-      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] } },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "sum by (node) (count_over_time({node=~\"$node\"} |~ \"(?i)$search\" [$__interval]))",
-          "legendFormat": "{{node}}"
-        }
-      ]
+      "id": 1,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
     },
     {
       "id": 2,
-      "title": "Errors & warnings by node",
-      "type": "timeseries",
-      "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
-      "fieldConfig": {
-        "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 50, "stacking": { "mode": "normal" } }, "unit": "short", "color": { "mode": "fixed", "fixedColor": "red" } },
-        "overrides": []
+      "type": "row",
+      "title": "Pipeline liveness & standing alerts",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 7
       },
-      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] } },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Nodes reporting",
+      "description": "Distinct `node` labels producing lines in the window. Expect 3 (gcp, hetzner, aws). Fewer means an Alloy is down, its credential expired, or the journal group grant was lost \u2014 the last of which fails silently, with every component still reporting healthy.",
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "sum by (node) (count_over_time({node=~\"$node\", level=~\"err|crit|alert|emerg|warning\"} |~ \"(?i)$search\" [$__interval]))",
-          "legendFormat": "{{node}}"
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "count(sum by (node) (count_over_time({node=~\"$node\"} [$__range])))",
+          "editorMode": "code",
+          "queryType": "instant",
+          "instant": true
         }
-      ]
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 2
+              },
+              {
+                "color": "green",
+                "value": 3
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "id": 3,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 8
+      }
     },
     {
-      "id": 3,
-      "title": "Fleet logs",
+      "type": "stat",
+      "title": "Lines shipped",
+      "description": "Total journald lines across the selected nodes for the dashboard window.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "sum(count_over_time({node=~\"$node\"} [$__range]))",
+          "editorMode": "code",
+          "queryType": "instant",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "id": 4,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 8
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Warning and above",
+      "description": "Lines at journal priority warning/err/crit/alert/emerg. The `level` label comes from `__journal_priority_keyword`, promoted by Alloy's relabel stage.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "sum(count_over_time({node=~\"$node\", level=~\"emerg|alert|crit|err|warning\"} [$__range]))",
+          "editorMode": "code",
+          "queryType": "instant",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "id": 5,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 8
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Vault denials",
+      "description": "Vault audit records carrying a `permission denied` error \u2014 a principal reached for something its policy does not grant. Non-zero is not automatically bad (a probing script, a stale token) but every one should be explicable.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "sum(count_over_time({node=~\"$node\", unit=\"vault.service\"} |= `permission denied` | json t=\"type\" | t = `response` [$__range]))",
+          "editorMode": "code",
+          "queryType": "instant",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 20
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "id": 6,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 8
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Break-glass root attempts",
+      "description": "Calls to `sys/generate-root/*`. This is the documented recovery for re-provisioning Vault and is gated by a 3-of-5 recovery-key threshold held offline \u2014 so it is rare, deliberate, and should always correlate with something you were doing. Unexplained, it is an incident.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "sum(count_over_time({node=~\"$node\", unit=\"vault.service\"} |= `generate-root` | json p=\"request.path\", t=\"type\" | t = `request` | p =~ `sys/generate-root.*` [$__range]))",
+          "editorMode": "code",
+          "queryType": "instant",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "id": 7,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 8
+      }
+    },
+    {
+      "type": "stat",
+      "title": "SSH sessions accepted",
+      "description": "Successful publickey authentications across the fleet. GCP is reached over IAP, AWS over SSM, Hetzner as a mesh peer \u2014 so a login from an unexpected source address is worth a look.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "sum(count_over_time({node=~\"$node\", unit=~\"ssh.*\"} |= `Accepted` [$__range]))",
+          "editorMode": "code",
+          "queryType": "instant",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 20
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "id": 8,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 8
+      }
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "Volume & cost",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Line rate by node",
+      "description": "Lines per second, by node. Grafana Cloud bills on ingested volume, so this is a cost curve as much as an activity curve. A step change with no deployment behind it is usually a service that started retrying.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "sum by (node) (rate({node=~\"$node\"} [$__interval]))",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "spanNulls": true,
+            "pointSize": 4
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "id": 10,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 15
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Byte rate by node",
+      "description": "Bytes per second, using LogQL's `bytes_rate`. Diverging from the line rate above means line *size* changed \u2014 verbose JSON audit records weigh far more than a one-line service notice.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "sum by (node) (bytes_rate({node=~\"$node\"} [$__interval]))",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "spanNulls": true,
+            "pointSize": 4
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "id": 11,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 15
+      }
+    },
+    {
+      "type": "table",
+      "title": "Heaviest units in window",
+      "description": "Ranked by bytes, not lines \u2014 that is what you pay for. This is the panel that makes a runaway logger obvious. `conduit.service` sitting at the top is expected and is exactly the duplication called out in the header.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "topk(15, sum by (node, unit) (bytes_over_time({node=~\"$node\", unit=~\"$unit\"} | unit != \"\" [$__range])))",
+          "editorMode": "code",
+          "queryType": "instant",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "Value": "Bytes",
+              "node": "Node",
+              "unit": "Unit"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Bytes",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "id": 12,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 13,
+        "x": 0,
+        "y": 23
+      }
+    },
+    {
+      "type": "piechart",
+      "title": "Share of ingested bytes",
+      "description": "Where the Loki bill actually goes, by unit. Reading this next to the table tells you whether your volume is one loud service or broad-based.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "topk(10, sum by (unit) (bytes_over_time({node=~\"$node\", unit=~\"$unit\"} | unit != \"\" [$__range])))",
+          "editorMode": "code",
+          "queryType": "instant",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "pieType": "donut",
+        "displayLabels": [
+          "percent"
+        ],
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "values": [
+            "value"
+          ]
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "hideFrom": {}
+          }
+        },
+        "overrides": []
+      },
+      "id": 13,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 11,
+        "x": 13,
+        "y": 23
+      }
+    },
+    {
+      "id": 14,
+      "type": "row",
+      "title": "Identity & secrets \u2014 Vault and SPIRE",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Vault requests by principal",
+      "description": "Who is talking to Vault. No single audit field names the principal: `auth.metadata.role_name` is the most specific but is set on under half of requests, `auth.display_name` covers most of the rest, and pre-authentication requests (a login itself) legitimately have neither. `label_format` resolves that with a template fallback chain rather than dropping records, so the series add up to the real request rate.\n\nExpect `spire-server` renewing its token continuously, `gcp-viaduct-controlplane` for anything using the box's GCE identity, and `cert-aws-vault-agent` when the AWS Alloy pod starts. A principal you did not deploy, or a familiar one changing rate sharply, is the signal.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "sum by (principal) (count_over_time({node=~\"$node\", unit=\"vault.service\"} | json t=\"type\", role=\"auth.metadata.role_name\", disp=\"auth.display_name\" | t = `request` | label_format principal=\"{{ if .role }}{{ .role }}{{ else if .disp }}{{ .disp }}{{ else }}(unauthenticated){{ end }}\" [$__interval]))",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "spanNulls": true,
+            "pointSize": 4
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "id": 15,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "SPIRE federation heartbeat",
+      "description": "Each SPIRE server polling its peer's trust bundle, split by which node did the polling and which trust domain it fetched. Both directions should be continuously present \u2014 gcp refreshing `viaduct.aws` and aws refreshing `viaduct.gcp`, roughly every 75s.\n\n**This exists only in logs.** No metric covers federation liveness, so a silent half of this panel is the earliest warning that cross-cloud trust is decaying \u2014 well before an SVID actually fails to validate.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "sum by (node, trust_domain) (count_over_time({node=~\"$node\", unit=\"spire-server.service\"} | logfmt | msg = `Bundle refreshed` [$__interval]))",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "spanNulls": true,
+            "pointSize": 4
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "id": 16,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 34
+      }
+    },
+    {
+      "type": "table",
+      "title": "Vault paths touched",
+      "description": "Every secret path reached in the window, with the operation and the role that reached it. This is the audit question \u2014 *who read what* \u2014 answered directly. `kv/data/*/grafana` is the observability credential; `kv/data/wireguard/peers/*` is mesh registration; `auth/token/renew-self` is routine token upkeep.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "topk(20, sum by (path, op, principal) (count_over_time({node=~\"$node\", unit=\"vault.service\"} | json t=\"type\", path=\"request.path\", op=\"request.operation\", role=\"auth.metadata.role_name\", disp=\"auth.display_name\" | t = `request` | path != \"\" | label_format principal=\"{{ if .role }}{{ .role }}{{ else if .disp }}{{ .disp }}{{ else }}(unauthenticated){{ end }}\" [$__range])))",
+          "editorMode": "code",
+          "queryType": "instant",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "Value": "Calls",
+              "path": "Path",
+              "op": "Operation",
+              "principal": "Principal"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Calls",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "id": 17,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 43
+      }
+    },
+    {
       "type": "logs",
-      "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-      "gridPos": { "h": 15, "w": 18, "x": 0, "y": 8 },
+      "title": "Vault denials",
+      "description": "Audit responses carrying `permission denied`, reduced to the four things you want: operation, path, principal, source. `line_format` turns a 2 KB JSON record into one readable line \u2014 the full record is still there under the row expander.\n\nA denial is not automatically an attack; it is usually a policy boundary doing its job. The worked example in this deployment: `sys/generate-root/attempt` denied to `gcp-viaduct-controlplane`, because the CWE-863 remediation removed the admin policy's blanket `sys/*` grant. That is the control working \u2014 and is exactly what the `enable_unauthenticated_access = [\"generate-root\"]` listener setting was added to resolve. Denials on `auth/gcp/role/*` are the same story: admin deliberately cannot mint auth roles.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "{node=~\"$node\", unit=\"vault.service\"} |= `permission denied` | json t=\"type\", path=\"request.path\", op=\"request.operation\", role=\"auth.metadata.role_name\", disp=\"auth.display_name\", addr=\"request.remote_address\" | t = `response` | label_format principal=\"{{ if .role }}{{ .role }}{{ else if .disp }}{{ .disp }}{{ else }}(unauthenticated){{ end }}\" | line_format \"DENIED  {{ .op }} {{ .path }}   principal={{ .principal }}  from={{ .addr }}\"",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
       "options": {
         "showTime": true,
         "showLabels": false,
@@ -109,40 +1127,447 @@
         "dedupStrategy": "none",
         "sortOrder": "Descending"
       },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "{node=~\"$node\", level=~\"$level\", job=\"systemd-journal\"} |~ \"(?i)$search\"",
-          "maxLines": 1000
-        }
-      ]
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "id": 18,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 43
+      }
     },
     {
-      "id": 4,
-      "title": "Top units by volume (range)",
-      "type": "table",
-      "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-      "gridPos": { "h": 15, "w": 6, "x": 18, "y": 8 },
-      "fieldConfig": {
-        "defaults": { "custom": { "align": "auto" } },
-        "overrides": [
-          { "matcher": { "id": "byName", "options": "Value" }, "properties": [ { "id": "custom.width", "value": 80 }, { "id": "displayName", "value": "lines" } ] }
-        ]
-      },
-      "options": { "showHeader": true, "sortBy": [ { "displayName": "lines", "desc": true } ] },
+      "type": "logs",
+      "title": "Break-glass: root token generation",
+      "description": "Any call to `sys/generate-root/*`. Regenerating a root token is the documented path for re-provisioning Vault and needs 3 of 5 recovery keys held offline \u2014 so this panel should be empty except when you are deliberately doing that. It is given its own panel precisely because it must never scroll past unnoticed in a general log view.",
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "topk(15, sum by (unit) (count_over_time({node=~\"$node\"} |~ \"(?i)$search\" [$__range])))",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "{node=~\"$node\", unit=\"vault.service\"} |= `generate-root` | json t=\"type\", path=\"request.path\", op=\"request.operation\", addr=\"request.remote_address\" | t = `request` | path =~ `sys/generate-root.*` | line_format \"{{ .op }} {{ .path }}  from={{ .addr }}\"",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "id": 19,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 53
+      }
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Data plane & node services",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 61
+      },
+      "panels": []
+    },
+    {
+      "type": "logs",
+      "title": "Conduit lifecycle",
+      "description": "`conduit.service` with the `[STATS]` firehose filtered out (`!=` on the line), leaving starts, stops, capacity settings and errors. This is the whole reason a line filter beats a unit filter: the useful events are 4% of the stream and invisible without it.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "{node=~\"$node\", unit=\"conduit.service\"} != `[STATS]`",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "id": 21,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 62
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Xray, nginx & certbot",
+      "description": "The rest of the Hetzner ingress path: the proxy, the TLS terminator that fronts XHTTP, and certificate renewal. Certbot is quiet by design \u2014 DNS-01 renewals every 60 days \u2014 so anything here at all is worth reading.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "{node=~\"$node\", unit=~\"xray.service|nginx.service|certbot.*\"}",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "id": 22,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 62
+      }
+    },
+    {
+      "type": "logs",
+      "title": "AWS egress guardrail",
+      "description": "The free-tier cap guard on the AWS node. It reads `aws_mtd_egress_bytes` from the textfile collector and stops the Conduit pod as the monthly cap approaches \u2014 so its log is the record of how close you came, and whether it ever actually fired.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "{node=~\"$node\", unit=\"egress-guardrail.service\"}",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "id": 23,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 70
+      }
+    },
+    {
+      "type": "logs",
+      "title": "SPIRE agents & k3s errors",
+      "description": "Agent attestation and SVID rotation across both trust domains, plus anything k3s logs at error level. `logfmt` then a label filter is the idiomatic way to drop k3s's very chatty info-level COMPACT stream without a brittle line match.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "{node=~\"$node\", unit=~\"spire-agent.service|k3s.service\"} | logfmt | level =~ `error|warning|warn`",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "id": 24,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 70
+      }
+    },
+    {
+      "id": 25,
+      "type": "row",
+      "title": "Access & security",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 79
+      },
+      "panels": []
+    },
+    {
+      "type": "logs",
+      "title": "SSH sessions accepted",
+      "description": "Successful publickey logins, with user, source and key type pulled out by a named-capture `regexp` stage and reformatted. Backtick-quoted so the regex needs no escaping.\n\nExpected sources: `35.235.240.0/20` on GCP (that is IAP), the SSM agent on AWS, and your mesh address `10.99.0.4` on Hetzner. Anything else is the finding.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "{node=~\"$node\", unit=~\"ssh.*\"} |= `Accepted` | regexp `Accepted (?P<method>\\S+) for (?P<user>\\S+) from (?P<src>\\S+) port (?P<sport>\\d+)` | line_format \"{{ .user }}  <-  {{ .src }}   ({{ .method }})\"",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "id": 26,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 80
+      }
+    },
+    {
+      "type": "table",
+      "title": "Rejected SSH by source",
+      "description": "Failed and invalid-user attempts grouped by source IP. Only Hetzner exposes `:22` at all \u2014 GCP and AWS have no public SSH \u2014 so this is essentially the internet background noise hitting one host, and it is useful mainly as a baseline you would notice changing.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "topk(15, sum by (src) (count_over_time({node=~\"$node\", unit=~\"ssh.*\"} |~ `(?i)invalid user|failed password|authentication failure` | regexp `(?P<src>\\d+\\.\\d+\\.\\d+\\.\\d+)` | src != \"\" [$__range])))",
+          "editorMode": "code",
+          "queryType": "instant",
           "instant": true,
           "format": "table"
         }
       ],
       "transformations": [
-        { "id": "organize", "options": { "excludeByName": { "Time": true }, "renameByName": { "unit": "unit", "Value": "lines" } } }
-      ]
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "Value": "Attempts",
+              "src": "Source IP"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Attempts",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "id": 27,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 80
+      }
+    },
+    {
+      "id": 28,
+      "type": "row",
+      "title": "Explorer",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 90
+      },
+      "panels": []
+    },
+    {
+      "type": "logs",
+      "title": "Fleet log explorer",
+      "description": "Everything, with all four template variables applied \u2014 node, unit, level and a case-insensitive substring. This is the panel you actually drive during an incident; the ones above exist so you know where to point it.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "{node=~\"$node\", unit=~\"$unit\", level=~\"$level\"} |~ `(?i)$search`",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "id": 29,
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 14,
+        "w": 24,
+        "x": 0,
+        "y": 91
+      }
     }
   ]
 }
