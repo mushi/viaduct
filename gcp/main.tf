@@ -276,6 +276,10 @@ resource "google_compute_instance" "controlplane" {
     snapshot-approle-role-id = var.snapshot_approle_role_id
     snapshot-bucket          = google_storage_bucket.vault_snapshots.name
 
+    # Control-plane log shipper (Grafana Alloy → Loki). Empty sha disables it.
+    alloy-version = var.alloy_version
+    alloy-sha256  = var.alloy_amd64_sha256
+
     # Operator's one-time Vault bootstrap helper, delivered to /usr/local/bin by
     # startup.sh. Kept a standalone file so it is reviewable and lintable.
     bootstrap-vault-script = file("${path.module}/scripts/bootstrap-vault.sh")

@@ -44,10 +44,18 @@ WireGuard private key.
    `kv/data/wireguard/hub`. What it *does* still hold is worth stating plainly
    rather than leaving to be discovered:
 
-   - create/read/update/delete on `kv/data/aws/*` and `kv/data/hetzner/*` — the
-     **Cloudflare DNS-edit token** and the **Grafana Cloud keys**. The Cloudflare
-     token can create records for the zone, which is a path to issuing
-     certificates for the domain.
+   - create/read/update/delete on `kv/data/aws/*`, `kv/data/hetzner/*` and
+     `kv/data/gcp/*` — the **Cloudflare DNS-edit token** and the **Grafana Cloud
+     keys** for all three nodes. The Cloudflare token can create records for the
+     zone, which is a path to issuing certificates for the domain. `kv/data/gcp/*`
+     was added by the observability pass: it holds the control plane's own Grafana
+     Cloud push credential (`kv/gcp/grafana`), read at runtime by the node's Alloy
+     under the separate, read-only `gcp-alloy` policy. It widens this residual by
+     one more Grafana Cloud token — the same class of secret already listed, with
+     the same consequence (log/metric forgery or suppression in the tenant), not a
+     new one. Note the credential covers the node whose metadata identity mints
+     this token in the first place, so a holder able to reach it can already
+     silence the audit trail its own use would leave.
    - read/delete on `kv/data/wireguard/peers/*`, so a holder can drop a peer
      registration (a spoke disconnects at the next reconcile) though not read the
      hub key or forge a peer.

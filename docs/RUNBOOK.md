@@ -70,8 +70,11 @@ Everything below is deliberate fail-closed behaviour. Match the message, run the
   Create an API token (**My Profile → API Tokens**) with `Zone:DNS:Edit` on your zone;
   certbot uses it for DNS-01 issuance.
 - **Grafana Cloud:** create a stack; from **Prometheus → Details** note the Remote Write
-  endpoint + Username; under **Access Policies** create one scoped to `metrics:write` and
-  generate a token; import the dashboards.
+  endpoint + Username, and from **Loki → Details** note the push URL + Username; under
+  **Access Policies** create one scoped to `metrics:write` **and** `logs:write` and generate
+  a token (the same token is reused for both); import the dashboards. All three nodes ship
+  journald to Loki (Vault audit + SPIRE + wg hub + sshd on GCP; spire-server + k3s + sshd on
+  AWS; sshd + xray + conduit + nginx + certbot on Hetzner), queryable by `{node="…"}`.
 
 ## First deploy
 
@@ -123,10 +126,14 @@ vault login -method=gcp role=admin type=gce      # your login from here on; ther
 # and read policies — it deliberately cannot create policies, auth roles or mounts.
 # Re-provisioning Vault needs a fresh root token: `vault operator generate-root`
 # with the recovery keys, which is an explicit and auditable act.
-vault kv put kv/aws/grafana        prometheus_url=<url> prometheus_user=<user> api_key=<metrics:write-token>
-vault kv put kv/hetzner/grafana    prometheus_url=<url> prometheus_user=<user> api_key=<metrics:write-token>
+# api_key must be scoped metrics:write + logs:write (loki_* are the Loki push URL + user).
+vault kv put kv/aws/grafana        prometheus_url=<url> prometheus_user=<user> loki_url=<loki-push-url> loki_user=<loki-user> api_key=<token>
+vault kv put kv/hetzner/grafana    prometheus_url=<url> prometheus_user=<user> loki_url=<loki-push-url> loki_user=<loki-user> api_key=<token>
+vault kv put kv/gcp/grafana        loki_url=<loki-push-url> loki_user=<loki-user> api_key=<logs:write-token>   # control-plane logs only
 vault kv put kv/hetzner/cloudflare  api_token=<cloudflare-zone-dns-edit-token>
 ```
+The control-plane node also needs `alloy_amd64_sha256` set in `gcp/terraform.tfvars` (same
+value as the root module's `alloy_zip_sha256`; leave empty to disable the GCP log shipper).
 
 ### 3. Hetzner data plane
 
@@ -216,8 +223,16 @@ Gives you Vault, SPIRE, and Hetzner admin over `wg0` instead of public paths.
 
 - SVIDs issuing: on GCP, `sudo spire-server entry show`.
 - Federation: `sudo spire-server bundle list | grep viaduct.aws`.
-- AWS Alloy healthy: over SSM, `sudo k3s kubectl -n viaduct get pods` (Alloy `Running`).
+- AWS Alloy healthy: over SSM, `sudo k3s kubectl -n viaduct-obs get pods` (Alloy `Running`).
+  Alloy lives in `viaduct-obs`, not `viaduct`: its hostPath mounts are forbidden by the Pod
+  Security **baseline** profile `viaduct` enforces. If the pod is missing rather than
+  unhealthy, check `kubectl -n viaduct-obs describe rs -l app=alloy` for `FailedCreate`.
 - Metrics arriving in Grafana Cloud under all three `node` labels.
+- Logs arriving in Loki: `{node="hetzner"}`, `{node="aws"}`, `{node="gcp"}` each return
+  lines, and the **Viaduct — Fleet Logs** dashboard populates. A node whose Alloy is up but
+  whose logs are absent is usually one of two silent failures: the `alloy` user not being in
+  the `systemd-journal` group (the journal source reads nothing and still reports healthy),
+  or a Grafana Cloud token missing the `logs:write` scope (401s in `journalctl -u alloy`).
 - Vault reachable + verified over the mesh. The listener cert is self-signed and
   **regenerated on every GCP rebuild**, so pull the current one first, then verify (no
   `-k`):
@@ -272,7 +287,7 @@ Anything else needs the `deploy` account. Adding a unit means extending the wrap
 Alloy's UI on AWS is bound to the pod's loopback. Reach it with:
 
 ```sh
-sudo k3s kubectl -n viaduct port-forward deploy/alloy 12345:12345   # then http://127.0.0.1:12345
+sudo k3s kubectl -n viaduct-obs port-forward deploy/alloy 12345:12345   # then http://127.0.0.1:12345
 ```
 
 ## Recovery

@@ -148,8 +148,10 @@ vault policy write admin - <<'EOF'
 # Seeding and rotating the workload secrets (RUNBOOK.md "Vault bootstrap").
 path "kv/data/aws/*"             { capabilities = ["create", "read", "update", "delete"] }
 path "kv/data/hetzner/*"         { capabilities = ["create", "read", "update", "delete"] }
+path "kv/data/gcp/*"             { capabilities = ["create", "read", "update", "delete"] }
 path "kv/metadata/aws/*"         { capabilities = ["read", "list", "delete"] }
 path "kv/metadata/hetzner/*"     { capabilities = ["read", "list", "delete"] }
+path "kv/metadata/gcp/*"         { capabilities = ["read", "list", "delete"] }
 
 # Clearing a stale peer registration is the documented recovery for a rebuilt spoke
 # whose key changed. kv/data/wireguard/hub is deliberately absent: that is the hub's
@@ -200,6 +202,15 @@ path "kv/metadata/wireguard/*"       { capabilities = ["read", "list"] }
 EOF
 vault write auth/gcp/role/wireguard-hub type=gce project_id="$PROJECT" bound_zones="$ZONE" \
   bound_service_accounts="$SA_EMAIL" policies=wireguard-hub token_ttl=5m token_max_ttl=10m >/dev/null
+
+# gcp-alloy: the control-plane node's own Alloy reads only its Grafana Cloud Loki
+# push credential (kv/gcp/grafana) to ship journald + the Vault audit log to Loki.
+# Uses gcp-auth (the box's GCE identity), so there is no secret-id to place or rotate.
+vault policy write gcp-alloy - <<'EOF'
+path "kv/data/gcp/grafana"           { capabilities = ["read"] }
+EOF
+vault write auth/gcp/role/alloy type=gce project_id="$PROJECT" bound_zones="$ZONE" \
+  bound_service_accounts="$SA_EMAIL" policies=gcp-alloy token_ttl=10m token_max_ttl=30m >/dev/null
 log "gcp-auth roles ready"
 
 # ── Converge the box now that Vault is configured. On a FIRST bootstrap the mesh
@@ -236,8 +247,10 @@ log ""
 log "  unset VAULT_CACERT   # vault loads it even with skip-verify; clear any lingering value"
 log "  export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true"
 log "  vault login -method=gcp role=admin type=gce"
-log "  vault kv put kv/aws/grafana        prometheus_url=<url> prometheus_user=<user> api_key=<metrics:write-token>"
-log "  vault kv put kv/hetzner/grafana    prometheus_url=<url> prometheus_user=<user> api_key=<metrics:write-token>"
+log "  # api_key must be a Grafana Cloud access-policy token scoped metrics:write + logs:write"
+log "  vault kv put kv/aws/grafana        prometheus_url=<url> prometheus_user=<user> loki_url=<loki-push-url> loki_user=<loki-user> api_key=<token>"
+log "  vault kv put kv/hetzner/grafana    prometheus_url=<url> prometheus_user=<user> loki_url=<loki-push-url> loki_user=<loki-user> api_key=<token>"
+log "  vault kv put kv/gcp/grafana        loki_url=<loki-push-url> loki_user=<loki-user> api_key=<logs:write-token>   # control-plane logs only"
 log "  vault kv put kv/hetzner/cloudflare  api_token=<cloudflare-zone-dns-edit-token>"
 
 # ── Revoke the init root token, only when running AS root, and only after the

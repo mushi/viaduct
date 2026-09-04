@@ -93,7 +93,11 @@ class AlloyConfigRenderTest(unittest.TestCase):
         out = Path(tmp) / "out"
         out.mkdir()
 
-        fields = {"prometheus_url": url, "prometheus_user": user, "api_key": key}
+        fields = {"prometheus_url": url, "prometheus_user": user, "api_key": key,
+                  # Loki push creds are fetched by the same renderer; the injection
+                  # tests vary the prometheus_* fields, so keep these fixed-good.
+                  "loki_url": "https://logs-prod-01.grafana.net/loki/api/v1/push",
+                  "loki_user": "987654"}
         # Each value is written to a file and cat-ed back, so the stub delivers the
         # exact bytes. Interpolating a Python repr into the stub would turn an
         # embedded newline into a literal backslash-n and quietly stop exercising

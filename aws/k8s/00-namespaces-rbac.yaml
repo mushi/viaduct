@@ -3,12 +3,21 @@
 # mints a short-lived SA token (kubectl create token, 24h)
 # into /opt/spire/conf/agent/k8s-sa-token and a systemd timer rotates it.
 # The ClusterRole below is what the minted token carries (read-only pods/nodes).
-# viaduct ns: workloads (conduit, alloy). SA vault-agent maps via a SPIRE entry to
-#   spiffe://viaduct.aws/vault-agent, which GCP Vault's cert-auth trusts.
+# viaduct ns: the data-plane workload (conduit), PSS-enforced at baseline.
+# viaduct-obs ns: Alloy, which needs hostPath and so cannot live under baseline. SA
+#   vault-agent maps via a SPIRE entry to spiffe://viaduct.aws/vault-agent, which GCP
+#   Vault's cert-auth trusts; the SPIFFE ID is unchanged by the namespace split, so no
+#   Vault-side role changes with it (only the SPIRE entry's k8s:ns selector).
 ---
 apiVersion: v1
 kind: Namespace
-metadata: { name: spire }
+metadata:
+  name: spire
+  labels:
+    # Intentionally exempt from Pod Security enforcement: the SPIFFE CSI driver here is
+    # legitimately privileged + hostPath (it publishes the Workload API socket). Its
+    # controls are RBAC and the pinned image digest, not PSS.
+    pod-security.kubernetes.io/enforce: privileged
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -31,8 +40,44 @@ subjects:
 ---
 apiVersion: v1
 kind: Namespace
-metadata: { name: viaduct }
+metadata:
+  name: viaduct
+  labels:
+    # Defense-in-depth against the postmortem's escalation primitive: reject any pod that
+    # requests privileged mode, a host namespace, or a hostPath mount. Conduit (non-root,
+    # caps dropped, no host mounts) is baseline-compliant, so baseline is enforced here and
+    # restricted is set to warn/audit to surface the remaining residual.
+    #
+    # Alloy is deliberately NOT in this namespace. It mounts hostPath (/proc, /sys, the
+    # textfile dir, journald) for node metrics and host logs, and hostPath is a *baseline*
+    # control — not restricted-only, as an earlier revision of this comment claimed.
+    # Enforcing baseline here rejected every Alloy pod outright (FailedCreate, 22h of no
+    # metrics). It now runs in viaduct-obs below, so the PSS exemption is scoped to the one
+    # workload that needs it rather than spent on the whole workload namespace.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+---
+# Observability namespace. Exempt from PSS *enforcement* because Alloy legitimately needs
+# hostPath, and no PSS level forbids privileged while permitting hostPath — so the choice is
+# where to spend the exemption, not whether to. warn/audit stay at baseline, so a pod that
+# went privileged or took a host namespace would still be reported. Alloy's actual controls
+# are RBAC (nothing else may create pods here), the pinned image digests, the loopback-only
+# admin listener, and the default-deny NetworkPolicy in 20-alloy.yaml.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: viaduct-obs
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: baseline
+    pod-security.kubernetes.io/warn-version: latest
+    pod-security.kubernetes.io/audit: baseline
+    pod-security.kubernetes.io/audit-version: latest
 ---
 apiVersion: v1
 kind: ServiceAccount
-metadata: { name: vault-agent, namespace: viaduct }
+metadata: { name: vault-agent, namespace: viaduct-obs }

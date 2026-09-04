@@ -86,3 +86,56 @@ prometheus.remote_write "grafana_cloud" {
     }
   }
 }
+
+// ── Logs: systemd journal → Grafana Cloud Loki ────────────────────────────
+// Ships the node's journald to Loki so SSH/sudo, certbot, xray, conduit, nginx and
+// the fetch-secrets units are all queryable centrally (and correlatable across nodes
+// by the `node` label) — the fleet-wide behaviour/pattern visibility the observability
+// pass is for. Loki creds ride the same vault-rendered grafana.env; never on disk.
+
+loki.source.journal "journal" {
+  forward_to = [loki.relabel.journal.receiver]
+  labels     = { job = "systemd-journal" }
+  max_age    = "12h"
+}
+
+// Promote a couple of journal fields to queryable labels (the unit and severity).
+loki.relabel "journal" {
+  forward_to = [loki.write.grafana_cloud.receiver]
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+}
+
+// ── OTLP receiver (localhost only) ────────────────────────────────────────
+// A local OTLP endpoint so first-party services can emit telemetry. Only logs are
+// wired to a sink today; the `traces` output is added when the probe is instrumented
+// (a Tempo exporter). Bound to 127.0.0.1 so it is never reachable off-box.
+otelcol.receiver.otlp "default" {
+  grpc { endpoint = "127.0.0.1:4317" }
+  http { endpoint = "127.0.0.1:4318" }
+  output {
+    logs = [otelcol.exporter.loki.default.input]
+  }
+}
+
+otelcol.exporter.loki "default" {
+  forward_to = [loki.write.grafana_cloud.receiver]
+}
+
+// ── Write: Grafana Cloud Loki ─────────────────────────────────────────────
+loki.write "grafana_cloud" {
+  external_labels = { node = "hetzner" }
+  endpoint {
+    url = sys.env("GRAFANA_LOKI_URL")
+    basic_auth {
+      username = sys.env("GRAFANA_LOKI_USER")
+      password = sys.env("GRAFANA_KEY")
+    }
+  }
+}

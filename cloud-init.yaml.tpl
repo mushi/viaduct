@@ -361,6 +361,10 @@ write_files:
       Type=simple
       User=alloy
       Group=alloy
+      # loki.source.journal reads the systemd journal, whose files are group-readable only
+      # by systemd-journal (mode 2640). Grant that group at runtime so Alloy can ship
+      # journald to Loki; read-only, and it needs no persistent usermod.
+      SupplementaryGroups=systemd-journal
       WorkingDirectory=/var/lib/alloy
       # Grafana Cloud creds are rendered here from Vault at boot (never on disk in /etc).
       # Required (no leading '-'): Alloy will not start until the fetch has run.

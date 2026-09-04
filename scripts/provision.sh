@@ -27,7 +27,8 @@ set -euo pipefail
 # Shared guards: host-key pinning + the allowlists applied to any value that a
 # remote node produces before it is interpolated into a root command elsewhere.
 # shellcheck source=scripts/lib/provision-guards.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/provision-guards.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "${SCRIPT_DIR}/lib/provision-guards.sh"
 
 # Expand ~ in SSH_KEY_PATH (Terraform passes it literally if set in tfvars)
 SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$HOME}"
@@ -239,6 +240,29 @@ log "User list: $(tr '\n' ' ' < "$USERS_FILE")"
 upload "$ALLOY_CONFIG" "/etc/alloy/config.alloy" "640"
 remote chown root:alloy /etc/alloy/config.alloy
 
+# ── 6b. Converge the Vault secret-fetch script and Alloy's journal access ─────
+# Both of these otherwise ship only inside cloud-init user_data, and main.tf pins
+# `ignore_changes = [user_data]`, so an edit to either reaches a running box only on a
+# rebuild. That is how the node ended up running a config.alloy that referenced
+# GRAFANA_LOKI_URL against a grafana.env the old fetch script never wrote it into —
+# Alloy loaded, reported every component healthy, and shipped nothing. Upload them here
+# so a plain `terraform apply` converges an existing node.
+upload "${SCRIPT_DIR}/lib/mesh-trust.sh" "/usr/local/bin/lib/mesh-trust.sh" "644"
+upload "${SCRIPT_DIR}/fetch-hetzner-secrets.sh" "/usr/local/bin/fetch-hetzner-secrets.sh" "755"
+
+# loki.source.journal reads the journal files, which are group-readable only by
+# systemd-journal (mode 2640). cloud-init sets SupplementaryGroups in the unit for fresh
+# builds; this drop-in is the same grant for a box built before that, and a harmless
+# duplicate on one built after. Without it the journal source reads zero entries and
+# reports healthy — a silent failure with no error anywhere.
+# Staged and uploaded rather than written by a remote redirect: `remote` sudo-prefixes the
+# COMMAND, but a `>` in the string is applied by the remote login shell as `deploy`, which
+# cannot write under /etc. upload() installs as root and is the idiom used everywhere else.
+printf '[Service]\nSupplementaryGroups=systemd-journal\n' > "${CONTROL_DIR}/10-journal.conf"
+remote install -d -m 0755 /etc/systemd/system/alloy.service.d
+upload "${CONTROL_DIR}/10-journal.conf" "/etc/systemd/system/alloy.service.d/10-journal.conf" "644"
+remote systemctl daemon-reload
+
 # ── 7. Run xray-setup.sh --regen ─────────────────────────────────────────────
 
 log "Running xray-setup.sh --regen..."
@@ -413,6 +437,11 @@ EOF
       sleep 5
     done
     if remote "test -s /run/hetzner-secrets/grafana.env" && remote "test -s /run/hetzner-secrets/cloudflare.ini"; then
+      # hetzner-secrets-ready.path is PathExists=, which fires on the file appearing, not on
+      # it changing. On a box where grafana.env already existed (the common re-provision) the
+      # re-render above adds the Loki variables without retriggering anything, so restart
+      # Alloy here to pick them up. Tolerant: on a first deploy the .path has it covered.
+      remote systemctl restart alloy.service 2>/dev/null || true
       log "Vault secrets rendered to tmpfs. The TLS cert and Alloy/nginx are obtained/started"
       log "on the box by hetzner-secrets-ready.path — the provisioner no longer runs certbot"
       log "itself (two certbot instances at once collide on its lock)."

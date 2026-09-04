@@ -37,6 +37,12 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq curl unzip ca-certificates openssl >/dev/null
 
+# Persist journald so the Alloy pod (which mounts /var/log/journal read-only) can ship
+# spire-server / k3s / sshd records to Loki. Volatile /run/log/journal would vanish on
+# reboot and is not the path the pod mounts.
+install -d -m 2755 /var/log/journal
+systemctl restart systemd-journald || true
+
 # ─── 2. SPIRE (server + agent, arm64 musl, checksum-pinned) ───────────────────
 install -d /opt/spire/bin /opt/spire/conf/server /opt/spire/conf/agent /opt/spire/data/server /opt/spire/data/agent
 curl -fsSL -o /tmp/spire.tgz "https://github.com/spiffe/spire/releases/download/v$SPIRE_VERSION/spire-$SPIRE_VERSION-linux-arm64-musl.tar.gz"
@@ -263,7 +269,7 @@ if [ -n "$AGENT_ID" ]; then
   spire-server entry create \
     -parentID "$AGENT_ID" \
     -spiffeID "spiffe://$TRUST_DOMAIN/vault-agent" \
-    -selector k8s:ns:viaduct -selector k8s:sa:vault-agent \
+    -selector k8s:ns:viaduct-obs -selector k8s:sa:vault-agent \
     -dns vault-agent.aws || true
 fi
 

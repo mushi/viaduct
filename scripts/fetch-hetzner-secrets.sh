@@ -77,17 +77,23 @@ vh_check() {  # name value extended-regex
 GRAFANA_URL_V="$(kv grafana prometheus_url)"
 GRAFANA_USER_V="$(kv grafana prometheus_user)"
 GRAFANA_KEY_V="$(kv grafana api_key)"
+GRAFANA_LOKI_URL_V="$(kv grafana loki_url)"
+GRAFANA_LOKI_USER_V="$(kv grafana loki_user)"
 CF_TOKEN_V="$(kv cloudflare api_token)"
 
 vh_check prometheus_url  "$GRAFANA_URL_V"  '^https://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$'
 vh_check prometheus_user "$GRAFANA_USER_V" '^[A-Za-z0-9._@-]+$'
 vh_check api_key         "$GRAFANA_KEY_V"  '^[A-Za-z0-9._=+/-]+$'
+vh_check loki_url        "$GRAFANA_LOKI_URL_V"  '^https://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$'
+vh_check loki_user       "$GRAFANA_LOKI_USER_V" '^[A-Za-z0-9._@-]+$'
 vh_check cf_api_token    "$CF_TOKEN_V"     '^[A-Za-z0-9._-]+$'
 
 {
-  printf 'GRAFANA_URL=%s\n'  "$GRAFANA_URL_V"
-  printf 'GRAFANA_USER=%s\n' "$GRAFANA_USER_V"
-  printf 'GRAFANA_KEY=%s\n'  "$GRAFANA_KEY_V"
+  printf 'GRAFANA_URL=%s\n'       "$GRAFANA_URL_V"
+  printf 'GRAFANA_USER=%s\n'      "$GRAFANA_USER_V"
+  printf 'GRAFANA_KEY=%s\n'       "$GRAFANA_KEY_V"
+  printf 'GRAFANA_LOKI_URL=%s\n'  "$GRAFANA_LOKI_URL_V"
+  printf 'GRAFANA_LOKI_USER=%s\n' "$GRAFANA_LOKI_USER_V"
 } > "$RUN/grafana.env"
 
 printf 'dns_cloudflare_api_token = %s\n' "$CF_TOKEN_V" > "$RUN/cloudflare.ini"

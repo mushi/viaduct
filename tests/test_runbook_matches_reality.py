@@ -91,9 +91,20 @@ class RunbookTest(unittest.TestCase):
                               f"the runbook documents {cmd}, which is never installed")
 
     def test_the_port_forward_target_matches_the_manifest(self):
-        self.assertIn("port-forward deploy/alloy 12345:12345", self.text)
-        self.assertRegex(ALLOY.read_text(), r"metadata: \{ name: alloy, namespace: viaduct \}",
-                         "the runbook port-forwards deploy/alloy in namespace viaduct")
+        # Read the namespace out of BOTH sides rather than pinning it here: Alloy moved from
+        # `viaduct` to `viaduct-obs` (Pod Security baseline forbids its hostPath mounts), and
+        # a hardcoded name turns that into a test failure instead of catching the thing the
+        # test is for — the runbook and the manifest drifting apart.
+        m = re.search(r"port-forward deploy/alloy 12345:12345", self.text)
+        self.assertIsNotNone(m, "the runbook no longer documents how to reach Alloy's UI")
+        runbook_ns = re.search(r"kubectl -n (\S+) port-forward deploy/alloy", self.text)
+        self.assertIsNotNone(runbook_ns, "the port-forward command names no namespace")
+        manifest_ns = re.search(r"metadata: \{ name: alloy, namespace: (\S+) \}",
+                                ALLOY.read_text())
+        self.assertIsNotNone(manifest_ns, "20-alloy.yaml has no alloy Deployment")
+        self.assertEqual(runbook_ns.group(1), manifest_ns.group(1),
+                         "the runbook port-forwards deploy/alloy in a different namespace "
+                         "than the one the manifest deploys it into")
         self.assertIn("--server.http.listen-addr=127.0.0.1:12345", ALLOY.read_text(),
                       "the runbook says the UI is loopback-only; the manifest disagrees")
 

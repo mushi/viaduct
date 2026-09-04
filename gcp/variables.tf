@@ -117,3 +117,15 @@ variable "wg_ingress_cidrs" {
   type        = list(string)
   default     = ["0.0.0.0/0"]
 }
+
+variable "alloy_version" {
+  description = "Grafana Alloy release tag for the control-plane log shipper (linux-amd64.zip). Match the data-plane alloy_version."
+  type        = string
+  default     = "v1.8.3"
+}
+
+variable "alloy_amd64_sha256" {
+  description = "SHA-256 of alloy-linux-amd64.zip for alloy_version (the same value as the root module's alloy_zip_sha256, since GCP is amd64). Leave empty to disable the control-plane log shipper. Run ../scripts/get-checksums.sh to obtain."
+  type        = string
+  default     = ""
+}

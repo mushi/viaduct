@@ -231,6 +231,12 @@ resource "terraform_data" "provision" {
     # triggers a (harmless) re-provision. Narrow the glob to "**/*.go" plus
     # go.mod/go.sum if you want to avoid that.
     probe_hash = sha256(join("", [for f in fileset("${path.module}/probe", "**") : filesha256("${path.module}/probe/${f}")]))
+    # The provisioner now also converges files that otherwise ship only in cloud-init
+    # user_data (fetch-hetzner-secrets.sh, the mesh-trust lib) — and user_data is pinned by
+    # ignore_changes below, so nothing else would notice an edit to them. Without this
+    # trigger, editing the fetch script changes no hash and the apply is a no-op on a
+    # running node.
+    scripts_hash = sha256(join("", [for f in fileset("${path.module}/scripts", "**") : filesha256("${path.module}/scripts/${f}")]))
   }
 
   provisioner "local-exec" {

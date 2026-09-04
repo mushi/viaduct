@@ -293,6 +293,12 @@ resource "aws_instance" "spire" {
   metadata_options {
     http_tokens   = "required"
     http_endpoint = "enabled"
+    # Pin the response hop limit to 1 so IMDS is reachable only from the host itself,
+    # never from a pod one hop away behind the CNI. AWS defaults this to 1, but pinning
+    # it makes the intent explicit and immune to a default/launch-path drift — the same
+    # control HuggingFace added after an agent read node-role credentials from a pod via
+    # IMDS (169.254.169.254) and pivoted from there.
+    http_put_response_hop_limit = 1
   }
 
   root_block_device {

@@ -78,6 +78,18 @@ mkdir -p /opt/vault/data
 cat > /etc/vault.d/vault.hcl <<EOF
 ui = false
 
+# Break-glass root generation. Vault 2.0 made sys/generate-root "conditionally
+# unauthenticated": it is only reachable without a token when the endpoint family
+# is listed here; otherwise it falls through to the ACL path and needs sudo on
+# sys/generate-root/*. The standing admin policy deliberately holds no such sudo
+# (the CWE-863 remediation removed the blanket sys/* grant), so without this line
+# there is NO way to regenerate a root token — the documented recovery for
+# re-provisioning Vault — short of a full rebuild. Listing it here restores the
+# intended break-glass while keeping it strictly stronger than the old sudo grant:
+# generate-root stays gated by a 3-of-5 recovery-key threshold held OFFLINE, not by
+# a token any local uid could mint from the metadata server.
+enable_unauthenticated_access = ["generate-root"]
+
 # mlock is DISABLED: on this
 # 1 GB host mlock inflated Vault's RSS to ~530 MB (Go heap arenas locked
 # resident); disabling it drops RSS to ~190 MB, which fits the box. Safe because
@@ -767,4 +779,147 @@ DROPIN
     || echo "WireGuard hub: MSS clamp not applied (iptables unavailable); large forwarded segments may need PMTU."
 else
   echo "WireGuard hub: Vault not bootstrapped yet (wireguard-hub role/kv absent); deferring wg0 to the next boot after BOOTSTRAP."
+fi
+
+# ── Control-plane log shipper: Grafana Alloy → Loki ───────────────────────────
+# Ships journald to Grafana Cloud Loki so control-plane behaviour is queryable
+# centrally alongside the data-plane nodes: Vault's audit records (its syslog audit
+# device lands them in journald), the SPIRE server, the WireGuard hub, and sshd.
+# Fully best-effort and guarded: nothing here can gate the control-plane boot, and it
+# stays dormant until the operator sets alloy-sha256 (empty = disabled). Credentials
+# are fetched at runtime via the box's own GCE identity (gcp-auth role 'alloy', policy
+# read kv/gcp/grafana) — no secret on disk, matching the rest of the control plane.
+ALLOY_VERSION="$(md instance/attributes/alloy-version || true)"
+ALLOY_SHA256="$(md instance/attributes/alloy-sha256 || true)"
+if [ -n "$ALLOY_SHA256" ]; then
+  if ! command -v alloy >/dev/null 2>&1; then
+    # apt-daily.service and unattended-upgrades hold the dpkg lock for a minute or more at
+    # a time, and this landed inside exactly that window once (2026-09-04): the install
+    # failed, `unzip` stayed absent, and the then-unguarded extraction below returned
+    # non-zero — which under this script's `set -e` aborted the WHOLE startup script, not
+    # just the shipper. Wait for the lock rather than racing it, re-test for the binary
+    # afterwards, and let every step here fail soft. The comment above promises this
+    # section cannot gate the control plane; these guards are what make that true.
+    if ! command -v unzip >/dev/null 2>&1; then
+      apt-get -o DPkg::Lock::Timeout=180 install -y -qq unzip >/dev/null 2>&1 || true
+    fi
+    AZIP="alloy-linux-amd64.zip"
+    if ! command -v unzip >/dev/null 2>&1; then
+      echo "alloy: unzip unavailable (dpkg lock held?); control-plane log shipper not installed" >&2
+    elif curl -fsSL -o "/tmp/$AZIP" "https://github.com/grafana/alloy/releases/download/${ALLOY_VERSION}/${AZIP}" \
+       && echo "${ALLOY_SHA256}  /tmp/$AZIP" | sha256sum -c - >/dev/null; then
+      ( cd /tmp && unzip -oq "$AZIP" && install -m 0755 alloy-linux-amd64 /usr/local/bin/alloy ) \
+        || echo "alloy: extraction failed; control-plane log shipper not installed" >&2
+      rm -f "/tmp/$AZIP" /tmp/alloy-linux-amd64
+    else
+      echo "alloy: download or checksum failed; control-plane log shipper not installed" >&2
+      rm -f "/tmp/$AZIP"
+    fi
+  fi
+
+  if command -v alloy >/dev/null 2>&1; then
+    id alloy >/dev/null 2>&1 || useradd --system --home-dir /var/lib/alloy --shell /usr/sbin/nologin alloy
+    usermod -aG systemd-journal alloy 2>/dev/null || true   # read the journal (Vault audit, spire, sshd)
+    install -d -o alloy -g alloy -m 0750 /var/lib/alloy
+    mkdir -p /etc/alloy
+
+    cat > /etc/alloy/config.alloy <<'ALLOYCFG'
+// Control-plane log shipper. journald carries Vault (syslog audit device), the SPIRE
+// server, the WireGuard hub and sshd; all forwarded to Grafana Cloud Loki.
+loki.source.journal "journal" {
+  forward_to = [loki.relabel.journal.receiver]
+  labels     = { job = "systemd-journal" }
+  max_age    = "12h"
+}
+loki.relabel "journal" {
+  forward_to = [loki.write.grafana_cloud.receiver]
+  rule { source_labels = ["__journal__systemd_unit"] target_label = "unit" }
+  rule { source_labels = ["__journal_priority_keyword"] target_label = "level" }
+}
+loki.write "grafana_cloud" {
+  external_labels = { node = "gcp" }
+  endpoint {
+    url = sys.env("GRAFANA_LOKI_URL")
+    basic_auth {
+      username = sys.env("GRAFANA_LOKI_USER")
+      password = sys.env("GRAFANA_KEY")
+    }
+  }
+}
+ALLOYCFG
+
+    cat > /usr/local/bin/gcp-alloy-fetch.sh <<'FETCH'
+#!/usr/bin/env bash
+# Fetch the Grafana Cloud Loki push credential from local Vault via the box's GCE
+# identity and render Alloy's EnvironmentFile. Fails (retried by systemd) until Vault
+# is bootstrapped and the gcp-auth 'alloy' role exists.
+set -euo pipefail
+export VAULT_ADDR="https://127.0.0.1:8200" VAULT_CACERT="/opt/vault/tls/vault.crt"
+TOKEN="$(vault login -method=gcp -token-only role=alloy type=gce)"
+export VAULT_TOKEN="$TOKEN"
+LURL="$(vault kv get -field=loki_url  kv/gcp/grafana)"
+LUSER="$(vault kv get -field=loki_user kv/gcp/grafana)"
+LKEY="$(vault kv get -field=api_key   kv/gcp/grafana)"
+unset VAULT_TOKEN
+# Shape-check before writing the EnvironmentFile: a newline in a value would declare a
+# further environment variable that systemd would hand to Alloy.
+case "$LURL" in https://*) ;; *) echo "gcp-alloy-fetch: bad loki_url" >&2; exit 1 ;; esac
+printf '%s' "$LUSER" | grep -qE '^[A-Za-z0-9._@-]+$'   || { echo "gcp-alloy-fetch: bad loki_user" >&2; exit 1; }
+printf '%s' "$LKEY"  | grep -qE '^[A-Za-z0-9._=+/-]+$' || { echo "gcp-alloy-fetch: bad api_key"   >&2; exit 1; }
+install -d -m 0750 /run/gcp-alloy
+umask 077
+{
+  printf 'GRAFANA_LOKI_URL=%s\n'  "$LURL"
+  printf 'GRAFANA_LOKI_USER=%s\n' "$LUSER"
+  printf 'GRAFANA_KEY=%s\n'       "$LKEY"
+} > /run/gcp-alloy/grafana.env
+chgrp alloy /run/gcp-alloy/grafana.env && chmod 0640 /run/gcp-alloy/grafana.env
+FETCH
+    chmod 0755 /usr/local/bin/gcp-alloy-fetch.sh
+
+    cat > /etc/systemd/system/gcp-alloy-fetch.service <<'EOF'
+[Unit]
+Description=Fetch Grafana Loki credential for control-plane Alloy
+After=vault.service network-online.target
+Wants=network-online.target
+# No start-rate limit: the fetch retries for as long as it takes Vault to be bootstrapped
+# and the gcp-auth 'alloy' role to exist, and must not be limiter-killed first. This key
+# belongs in [Unit] (systemd >= 229); in [Service] it is an unknown key and ignored.
+StartLimitIntervalSec=0
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/gcp-alloy-fetch.sh
+# Retry until Vault is bootstrapped and the gcp-auth 'alloy' role exists.
+Restart=on-failure
+RestartSec=30
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    cat > /etc/systemd/system/alloy.service <<'EOF'
+[Unit]
+Description=Grafana Alloy (control-plane log shipper)
+After=gcp-alloy-fetch.service network-online.target
+Wants=network-online.target
+Requires=gcp-alloy-fetch.service
+[Service]
+User=alloy
+Group=alloy
+EnvironmentFile=/run/gcp-alloy/grafana.env
+ExecStart=/usr/local/bin/alloy run --storage.path=/var/lib/alloy --server.http.listen-addr=127.0.0.1:12345 --server.http.enable-pprof=false /etc/alloy/config.alloy
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/alloy
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable --now gcp-alloy-fetch.service 2>/dev/null || true
+    systemctl enable --now alloy.service 2>/dev/null || true
+  fi
 fi

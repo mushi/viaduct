@@ -6,6 +6,12 @@
 # (emptyDir medium:Memory). Token is long-lived, so
 # the SVID is only needed at startup, so no continuous vault-agent sidecar needed.
 #
+# Alloy runs in the viaduct-obs namespace, not viaduct: its hostPath mounts (/proc, /sys,
+# the textfile dir, journald) are forbidden by the Pod Security 'baseline' profile that
+# viaduct enforces for conduit. See 00-namespaces-rbac.yaml for why the exemption is scoped
+# to this namespace. It still scrapes conduit across the namespace boundary via the
+# conduit-metrics service FQDN, which the NetworkPolicies at the bottom of this file allow.
+#
 # __GCP_CONTROL_PLANE_IP__ is substituted by startup.sh (real IP kept out of the repo).
 # The init container fetches GCP Vault's cert itself over the mesh (WireGuard authenticates
 # the peer), so there is no vault-ca ConfigMap to maintain. Depends on the
@@ -13,7 +19,7 @@
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: alloy, namespace: viaduct }
+metadata: { name: alloy, namespace: viaduct-obs }
 spec:
   replicas: 1
   selector: { matchLabels: { app: alloy } }
@@ -76,6 +82,8 @@ spec:
           U=$(vault kv get -field=prometheus_user kv/aws/grafana)
           K=$(vault kv get -field=api_key kv/aws/grafana)
           URL=$(vault kv get -field=prometheus_url kv/aws/grafana)
+          LURL=$(vault kv get -field=loki_url kv/aws/grafana)
+          LU=$(vault kv get -field=loki_user kv/aws/grafana)
           # These three go unescaped into the River heredoc below, which Alloy then
           # parses as configuration — and River configuration can declare components,
           # so a value carrying a quote or a newline does not merely break the render,
@@ -94,9 +102,11 @@ spec:
             [ "$(printf '%s' "$2" | wc -l)" -eq 0 ] || vh_reject "$1"
             printf '%s' "$2" | grep -qE "$3" || vh_reject "$1"
           }
-          vh_check prometheus_url  "$URL" '^https://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$'
-          vh_check prometheus_user "$U"   '^[A-Za-z0-9._@-]+$'
-          vh_check api_key         "$K"   '^[A-Za-z0-9._=+/-]+$'
+          vh_check prometheus_url  "$URL"  '^https://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$'
+          vh_check prometheus_user "$U"    '^[A-Za-z0-9._@-]+$'
+          vh_check api_key         "$K"    '^[A-Za-z0-9._=+/-]+$'
+          vh_check loki_url        "$LURL" '^https://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$'
+          vh_check loki_user       "$LU"   '^[A-Za-z0-9._@-]+$'
           cat > /rendered/config.alloy <<CFG
           prometheus.exporter.unix "node" {
             procfs_path    = "/host/proc"
@@ -123,6 +133,42 @@ spec:
               }
             }
             external_labels = { node = "aws" }
+          }
+
+          // ── Logs: host journald → Grafana Cloud Loki ──────────────────────
+          // The AWS node's journald (mounted read-only) carries the interesting
+          // security-relevant records: spire-server, k3s, and SSM/sshd sessions.
+          loki.source.journal "host" {
+            path       = "/host/journal"
+            forward_to = [loki.relabel.journal.receiver]
+            labels     = { job = "systemd-journal" }
+            max_age    = "12h"
+          }
+          loki.relabel "journal" {
+            forward_to = [loki.write.grafana.receiver]
+            rule { source_labels = ["__journal__systemd_unit"] target_label = "unit" }
+            rule { source_labels = ["__journal_priority_keyword"] target_label = "level" }
+          }
+
+          // ── OTLP receiver (localhost only); logs now, traces later ─────────
+          otelcol.receiver.otlp "default" {
+            grpc { endpoint = "127.0.0.1:4317" }
+            http { endpoint = "127.0.0.1:4318" }
+            output { logs = [otelcol.exporter.loki.default.input] }
+          }
+          otelcol.exporter.loki "default" {
+            forward_to = [loki.write.grafana.receiver]
+          }
+
+          loki.write "grafana" {
+            external_labels = { node = "aws" }
+            endpoint {
+              url = "$LURL"
+              basic_auth {
+                username = "$LU"
+                password = "$K"
+              }
+            }
           }
           CFG
           echo "rendered config.alloy"
@@ -176,6 +222,7 @@ spec:
         - { name: host-proc, mountPath: /host/proc, readOnly: true }
         - { name: host-sys, mountPath: /host/sys, readOnly: true }
         - { name: host-txt, mountPath: /host/textfile, readOnly: true }
+        - { name: host-journal, mountPath: /host/journal, readOnly: true }
       volumes:
       - { name: spiffe-workload-api, csi: { driver: csi.spiffe.io, readOnly: true } }
       - { name: svids, emptyDir: { medium: Memory } }
@@ -184,15 +231,18 @@ spec:
       - { name: host-proc, hostPath: { path: /proc } }
       - { name: host-sys, hostPath: { path: /sys } }
       - { name: host-txt, hostPath: { path: /var/lib/viaduct-textfile } }
+      # Persistent journald dir (startup.sh.tpl ensures /var/log/journal exists), so
+      # Alloy can ship spire-server / k3s / sshd records to Loki. Read-only.
+      - { name: host-journal, hostPath: { path: /var/log/journal } }
 ---
-# Default-deny ingress for the namespace. Alloy's HTTP server (:12345) serves its admin
-# UI and API; nothing in the cluster needs to reach it, and without a policy every pod
-# on the cluster network could. Alloy is outbound-only in normal operation: it scrapes
-# conduit-metrics:9090 and remote-writes to Grafana.
+# Default-deny ingress in both namespaces. Alloy's HTTP server (:12345) serves its admin
+# UI and API; nothing in the cluster needs to reach it, and without a policy every pod on
+# the cluster network could. Alloy is outbound-only in normal operation: it scrapes
+# conduit-metrics:9090 (cross-namespace) and remote-writes to Grafana.
 #
 # The listener is now on 127.0.0.1 (see the container args), so this policy is no longer
 # the only thing standing between the cluster and the admin API — it is defence in depth
-# for the namespace generally, and it is what confines conduit's metrics port.
+# for both namespaces, and it is what confines conduit's metrics port.
 #
 # The probe no longer depends on this policy either: it runs inside the pod via
 # bash /dev/tcp rather than being dialled by the kubelet, so the CNI's treatment of
@@ -204,7 +254,19 @@ spec:
   podSelector: {}
   policyTypes: [Ingress]
 ---
-# The one ingress the namespace genuinely needs: Alloy scraping Conduit's metrics port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: default-deny-ingress, namespace: viaduct-obs }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# The one ingress the workload namespace genuinely needs: Alloy scraping Conduit's metrics
+# port. Alloy now lives in viaduct-obs, so a bare podSelector no longer matches it — a
+# podSelector is namespace-local, and without the namespaceSelector this policy would
+# select nothing and the scrape would be dropped by the default-deny above. The label is
+# the one the API server sets on every namespace automatically (k8s >= 1.21), so it cannot
+# be spoofed by relabelling.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: { name: allow-alloy-scrape-conduit, namespace: viaduct }
@@ -214,7 +276,9 @@ spec:
   policyTypes: [Ingress]
   ingress:
   - from:
-    - podSelector:
+    - namespaceSelector:
+        matchLabels: { kubernetes.io/metadata.name: viaduct-obs }
+      podSelector:
         matchLabels: { app: alloy }
     ports:
     - { protocol: TCP, port: 9090 }
