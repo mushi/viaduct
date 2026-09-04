@@ -863,13 +863,14 @@ if [ -n "$ALLOY_SHA256" ]; then
     cat > /etc/alloy/config.alloy <<'ALLOYCFG'
 // Control-plane log shipper. journald carries Vault (syslog audit device), the SPIRE
 // server, the WireGuard hub and sshd; all forwarded to Grafana Cloud Loki.
-loki.source.journal "journal" {
-  forward_to = [loki.relabel.journal.receiver]
-  labels     = { job = "systemd-journal" }
-  max_age    = "12h"
-}
+// The rules below are consumed by loki.source.journal's `relabel_rules` argument, NOT
+// forwarded. Journal fields arrive as internal __journal_* labels, and Alloy drops every
+// __-prefixed label before handing entries to `forward_to` — so a loki.relabel component
+// chained downstream sees none of them and silently produces nothing. That is exactly what
+// happened here: Loki held only {job, node} and every unit/level panel read "No data".
+// forward_to = [] is deliberate and is what the upstream example specifies.
 loki.relabel "journal" {
-  forward_to = [loki.write.grafana_cloud.receiver]
+  forward_to = []
   rule {
     source_labels = ["__journal__systemd_unit"]
     target_label  = "unit"
@@ -878,6 +879,12 @@ loki.relabel "journal" {
     source_labels = ["__journal_priority_keyword"]
     target_label  = "level"
   }
+}
+loki.source.journal "journal" {
+  forward_to    = [loki.write.grafana_cloud.receiver]
+  relabel_rules = loki.relabel.journal.rules
+  labels        = { job = "systemd-journal" }
+  max_age       = "12h"
 }
 loki.write "grafana_cloud" {
   external_labels = { node = "gcp" }
