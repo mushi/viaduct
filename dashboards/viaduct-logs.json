@@ -8,6 +8,51 @@
         "iconColor": "rgba(0, 211, 255, 1)",
         "enable": true,
         "hide": true
+      },
+      {
+        "datasource": {
+          "type": "loki",
+          "uid": "${DS_LOKI}"
+        },
+        "name": "Conduit restarts",
+        "enable": true,
+        "hide": false,
+        "iconColor": "yellow",
+        "target": {
+          "expr": "{node=~\"$node\", unit=\"conduit.service\"} |= `Started conduit`",
+          "queryType": "range",
+          "refId": "AnnoConduit"
+        }
+      },
+      {
+        "datasource": {
+          "type": "loki",
+          "uid": "${DS_LOKI}"
+        },
+        "name": "Vault denials",
+        "enable": true,
+        "hide": false,
+        "iconColor": "red",
+        "target": {
+          "expr": "{node=~\"$node\", unit=\"vault.service\"} |= `permission denied` | json t=\"type\" | t = `response`",
+          "queryType": "range",
+          "refId": "AnnoDenied"
+        }
+      },
+      {
+        "datasource": {
+          "type": "loki",
+          "uid": "${DS_LOKI}"
+        },
+        "name": "SSH logins",
+        "enable": false,
+        "hide": false,
+        "iconColor": "semi-dark-blue",
+        "target": {
+          "expr": "{node=~\"$node\", unit=~\"ssh.*\"} |= `Accepted`",
+          "queryType": "range",
+          "refId": "AnnoSSH"
+        }
       }
     ]
   },
@@ -35,6 +80,17 @@
         "name": "DS_LOKI",
         "label": "Loki",
         "query": "loki",
+        "hide": 0,
+        "current": {},
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false
+      },
+      {
+        "type": "datasource",
+        "name": "DS_PROM",
+        "label": "Prometheus",
+        "query": "prometheus",
         "hide": 0,
         "current": {},
         "refresh": 1,
@@ -1517,13 +1573,531 @@
     {
       "id": 28,
       "type": "row",
-      "title": "Explorer",
+      "title": "Correlation \u2014 logs x metrics",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 90
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Telemetry pipeline health by node",
+      "description": "The panel that would have caught every failure in this deployment. Solid lines are log lines/sec from Loki; the dashed line is the count of healthy Prometheus scrape targets per node. Read the two together:\n\n- **metrics but no logs** -> Alloy is up and scraping, but the log path is broken. Almost always the `alloy` user missing the `systemd-journal` group, which reads zero entries while reporting every component healthy, or a Loki credential that never rendered.\n- **logs but no metrics** -> the scrape side. A target moved, or a NetworkPolicy stopped matching it after a namespace change.\n- **neither** -> the node or its Alloy is down. On AWS this looked like a Deployment that could never schedule a pod, so nothing logged an error anywhere.\n\nA node whose Alloy has stopped drops out of `up` entirely rather than reporting zero, so watch for a line that *ends* rather than one that falls.\n\n**Read gcp differently.** The control plane is logs-only by design \u2014 its Alloy config has no `prometheus.remote_write` at all \u2014 so it shows log lines and *zero* scrape targets permanently. That is the one case where the middle rule above does not apply. Only hetzner and aws should ever show a dashed line.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "sum by (node) (rate({node=~\"$node\"} [$__interval]))",
+          "editorMode": "code",
+          "queryType": "range",
+          "legendFormat": "{{node}} \u2014 log lines/s"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "count by (node) (up == 1)",
+          "editorMode": "code",
+          "range": true,
+          "legendFormat": "{{node}} \u2014 scrape targets up"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 6,
+            "showPoints": "never",
+            "spanNulls": false,
+            "pointSize": 4,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "targets up"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "id": 29,
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 91
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "AWS egress against the free-tier cap",
+      "description": "**AWS only.** The guardrail's whole state in one frame: month-to-date egress, the warn line, the hard cap (all from the textfile collector), and the guardrail unit's own log events on the right axis. The metrics say how close you are; the logs say what the guardrail did about it.\n\nExceeding the cap is the one thing in this lab that costs real money, so the useful read is the *slope* against the days left in the month, not the absolute value. Log events appearing while the metric is still well under the warn line means the guardrail is evaluating, not acting \u2014 which is what you want to see.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "aws_mtd_egress_bytes{node=~\"$node\"}",
+          "editorMode": "code",
+          "range": true,
+          "legendFormat": "month-to-date egress"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "aws_egress_warn_bytes{node=~\"$node\"}",
+          "editorMode": "code",
+          "range": true,
+          "legendFormat": "warn threshold"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "aws_egress_cap_bytes{node=~\"$node\"}",
+          "editorMode": "code",
+          "range": true,
+          "legendFormat": "hard cap"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "sum(rate({node=~\"$node\", unit=\"egress-guardrail.service\"} [$__interval]))",
+          "editorMode": "code",
+          "queryType": "range",
+          "legendFormat": "guardrail log events/s"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 6,
+            "showPoints": "never",
+            "spanNulls": false,
+            "pointSize": 4,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "D"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "cps"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "log events/s"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "id": 30,
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 91
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Probe SLIs against data-plane logs",
+      "description": "**Hetzner only** \u2014 the probe and the VLESS ingress both live there. The probe's own view of that path: success flag and failure rate broken down by reason \u2014 with the error-level log rate from xray and nginx on the right axis.\n\nThe correlation is the diagnostic. A probe failure **with** a rise in error-level logs is the service failing and saying so. A probe failure against **silent** logs is the network path between probe and service, or the probe itself \u2014 a very different investigation, and one you would waste time on if you only had the SLI.\n\nThe log side is the node-wide `level` label (promoted by Alloy from the journal priority), not a parse of xray or nginx. That is deliberate: xray logs `[Info]`-style brackets at journal priority 6 and carries no `level=` key, and nginx's `error_log` is a **file** that never reaches journald at all \u2014 so a unit-scoped parser here would be a series that can never fire, which is worse than no panel. Expect silence on this axis most of the time; that is the honest state, and it is what makes a correlated spike meaningful.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "probe_success{node=~\"$node\"}",
+          "editorMode": "code",
+          "range": true,
+          "legendFormat": "probe success ({{service}}/{{path}})"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "sum by (reason) (rate(probe_failures_total{node=~\"$node\"} [$__interval]))",
+          "editorMode": "code",
+          "range": true,
+          "legendFormat": "failures: {{reason}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "sum(rate({node=~\"$node\", level=~\"emerg|alert|crit|err|warning\"} [$__interval]))",
+          "editorMode": "code",
+          "queryType": "range",
+          "legendFormat": "node error+ log rate"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 6,
+            "showPoints": "never",
+            "spanNulls": false,
+            "pointSize": 4,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "cps"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "log errors/s"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "id": 31,
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 101
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Conduit: what the metric knows, what the logs cost",
+      "description": "Connected clients from `conduit_connected_clients` against the byte rate of `conduit.service`'s own log stream. Both lines describe the same thing; only one of them is worth paying for.\n\nThe metric is one sample per 30s with a real `conduit_region_*` breakdown behind it. The log stream is ~0.5 lines/sec of `[STATS]` carrying the same counters, **truncated** at `(+39 more...)`, at roughly 60,000 lines a day. This panel is the argument for why nothing else on this dashboard is built on those lines \u2014 and the place you would look first if the Loki bill moved.",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROM}"
+          },
+          "expr": "conduit_connected_clients{node=~\"$node\"}",
+          "editorMode": "code",
+          "range": true,
+          "legendFormat": "{{node}} \u2014 connected clients"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "sum by (node) (bytes_rate({node=~\"$node\", unit=\"conduit.service\"} [$__interval]))",
+          "editorMode": "code",
+          "queryType": "range",
+          "legendFormat": "{{node}} \u2014 conduit log bytes/s"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 6,
+            "showPoints": "never",
+            "spanNulls": false,
+            "pointSize": 4,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "Bps"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "log bytes/s"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "id": 32,
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 101
+      }
+    },
+    {
+      "id": 33,
+      "type": "row",
+      "title": "Explorer",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 112
       },
       "panels": []
     },
@@ -1557,7 +2131,7 @@
         "defaults": {},
         "overrides": []
       },
-      "id": 29,
+      "id": 34,
       "datasource": {
         "type": "loki",
         "uid": "${DS_LOKI}"
@@ -1566,7 +2140,7 @@
         "h": 14,
         "w": 24,
         "x": 0,
-        "y": 91
+        "y": 113
       }
     }
   ]
