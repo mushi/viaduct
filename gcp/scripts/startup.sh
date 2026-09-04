@@ -781,6 +781,43 @@ else
   echo "WireGuard hub: Vault not bootstrapped yet (wireguard-hub role/kv absent); deferring wg0 to the next boot after BOOTSTRAP."
 fi
 
+# ── rsyslog hygiene (do this before shipping logs anywhere) ───────────────────
+# GCE's stock /etc/rsyslog.d/90-google.conf routes `daemon,kern.*` to /dev/console,
+# which on this image is console=ttyS0,115200. A 115200-baud serial line cannot absorb
+# the daemon-facility rate, so the omfile action suspends and resumes continuously —
+# ~22 events a minute — and because those notices are themselves daemon-facility they
+# feed the loop. Measured before this change: 44% of everything the node shipped to
+# Loki was that churn, i.e. we were paying Grafana Cloud to store rsyslog complaining
+# about rsyslog. Narrowing to err+ keeps what the rule is actually for (Google's own
+# comment: "logging information in case of an unexpected crash during boot") — a panic
+# is crit/emerg and still reaches the serial console — while dropping the chatter.
+#
+# The ufw and mail rules go too: ufw is inactive on this box and there is no MTA, so
+# neither target ever receives a message and neither file is ever created.
+#
+# Idempotent (each edit is guarded by a match on the un-edited form) and never fatal:
+# log hygiene must not gate the control-plane boot, so nothing here is allowed to trip
+# `set -e` — the same lesson as the Alloy install below.
+RSYSLOG_CHANGED=0
+if [ -f /etc/rsyslog.d/90-google.conf ] && grep -q '^daemon,kern\.\* /dev/console' /etc/rsyslog.d/90-google.conf; then
+  sed -i 's|^daemon,kern\.\* /dev/console|daemon,kern.err /dev/console|' /etc/rsyslog.d/90-google.conf && RSYSLOG_CHANGED=1
+fi
+if [ -f /etc/rsyslog.d/20-ufw.conf ] && grep -q '^:msg,contains,"\[UFW " ' /etc/rsyslog.d/20-ufw.conf; then
+  sed -i 's|^:msg,contains,"\[UFW " |#:msg,contains,"[UFW " |' /etc/rsyslog.d/20-ufw.conf && RSYSLOG_CHANGED=1
+fi
+if [ -f /etc/rsyslog.d/50-default.conf ] && grep -qE '^mail\.' /etc/rsyslog.d/50-default.conf; then
+  sed -i -E 's|^(mail\.[a-z*]+[[:space:]])|#\1|' /etc/rsyslog.d/50-default.conf && RSYSLOG_CHANGED=1
+fi
+if [ "$RSYSLOG_CHANGED" = "1" ]; then
+  # Validate before restarting: a syntax error here would take the box's logging down,
+  # including the audit trail, which is worse than the flap being fixed.
+  if rsyslogd -N1 >/dev/null 2>&1; then
+    systemctl restart rsyslog || echo "rsyslog: restart failed after config edit; check journalctl -u rsyslog" >&2
+  else
+    echo "rsyslog: edited config failed validation; NOT restarting (flap persists, logging intact)" >&2
+  fi
+fi
+
 # ── Control-plane log shipper: Grafana Alloy → Loki ───────────────────────────
 # Ships journald to Grafana Cloud Loki so control-plane behaviour is queryable
 # centrally alongside the data-plane nodes: Vault's audit records (its syslog audit

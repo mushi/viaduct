@@ -296,6 +296,14 @@ sudo k3s kubectl -n viaduct-obs port-forward deploy/alloy 12345:12345   # then h
 first boot; a fresh backup is taken just before the old instance is destroyed, and the
 readiness gate holds the apply until Vault is unsealed and SPIRE is active. No manual steps.
 
+**If the control plane will not boot,** read the GCE serial console
+(`gcloud compute instances get-serial-port-output viaduct-controlplane --zone <zone>`). It
+carries kernel output plus `daemon,kern.err` and above — `startup.sh` narrows Google's stock
+`daemon,kern.*` rule to err+, because a 115200-baud line cannot absorb the full daemon rate
+and rsyslog flaps suspending/resuming the action (once ~44% of everything this node shipped
+to Loki). A panic or boot failure is crit/emerg and still appears. Routine daemon chatter
+does not — read that in Loki (`{node="gcp"}`) or `journalctl` instead.
+
 A rebuild regenerates the Vault listener cert (new key, same SANs), so any locally cached
 `~/vault.crt` goes stale: re-pull it (see step 7) for local verification. The spokes need no
 action: each re-fetches the rotated cert over the mesh when it next needs it (Hetzner at
