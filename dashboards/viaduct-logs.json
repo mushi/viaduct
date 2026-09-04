@@ -776,13 +776,19 @@
           }
         },
         {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^Value.*$",
+            "renamePattern": "Bytes"
+          }
+        },
+        {
           "id": "organize",
           "options": {
             "excludeByName": {
               "Time": true
             },
             "renameByName": {
-              "Value": "Bytes",
               "node": "Node",
               "unit": "Unit"
             }
@@ -1088,13 +1094,19 @@
           }
         },
         {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^Value.*$",
+            "renamePattern": "Calls"
+          }
+        },
+        {
           "id": "organize",
           "options": {
             "excludeByName": {
               "Time": true
             },
             "renameByName": {
-              "Value": "Calls",
               "path": "Path",
               "op": "Operation",
               "principal": "Principal"
@@ -1503,13 +1515,19 @@
           }
         },
         {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^Value.*$",
+            "renamePattern": "Attempts"
+          }
+        },
+        {
           "id": "organize",
           "options": {
             "excludeByName": {
               "Time": true
             },
             "renameByName": {
-              "Value": "Attempts",
               "src": "Source IP"
             }
           }

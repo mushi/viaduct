@@ -115,12 +115,21 @@ def logs(title, desc, expr, wrap=True, prettify=False, h_time=True):
             "fieldConfig": {"defaults": {}, "overrides": []}}
 
 def table(title, desc, expr, renames, unit="short", sortby=None, desc_sort=True):
+    value_name = renames.pop("Value", "Value")
     return {"type": "table", "title": title, "description": desc,
             "targets": [tgt(expr, instant=True, queryType="instant", format="table")],
+            # Order matters, and so does the regex. Grafana names an instant query's value
+            # field "Value" for a lone frame but "Value #A" once refIds are involved, so a
+            # renameByName keyed on "Value" silently no-ops — which left these tables with a
+            # raw "Value #A" header AND an unsorted body, because the sortBy then referenced
+            # a field name that did not exist. A "heaviest units" table in arbitrary order is
+            # worse than useless. renameByRegex catches both spellings; sort runs after it.
             "transformations": [
                 {"id": "labelsToFields", "options": {"mode": "columns"}},
+                {"id": "renameByRegex", "options": {"regex": "^Value.*$", "renamePattern": value_name}},
                 {"id": "organize", "options": {"excludeByName": {"Time": True}, "renameByName": renames}},
-            ] + ([{"id": "sortBy", "options": {"fields": {}, "sort": [{"field": sortby, "desc": desc_sort}]}}] if sortby else []),
+            ] + ([{"id": "sortBy", "options": {"fields": {},
+                   "sort": [{"field": value_name, "desc": desc_sort}]}}] if sortby else []),
             "options": {"showHeader": True, "cellHeight": "sm",
                         "footer": {"show": False, "reducer": ["sum"], "countRows": False, "fields": ""}},
             "fieldConfig": {"defaults": {"unit": unit, "custom": {"align": "auto", "filterable": True},
