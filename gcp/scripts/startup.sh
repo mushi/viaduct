@@ -833,8 +833,14 @@ loki.source.journal "journal" {
 }
 loki.relabel "journal" {
   forward_to = [loki.write.grafana_cloud.receiver]
-  rule { source_labels = ["__journal__systemd_unit"] target_label = "unit" }
-  rule { source_labels = ["__journal_priority_keyword"] target_label = "level" }
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
 }
 loki.write "grafana_cloud" {
   external_labels = { node = "gcp" }
