@@ -16,23 +16,6 @@ set -euo pipefail
 # fails with "command not found" and is silently swallowed inside `if` guards.
 export PATH="/snap/bin:$PATH"
 
-# ── Serialise concurrent runs ────────────────────────────────────────────────
-# This script runs from two places: the GCE guest agent at boot, and the converge
-# provisioner in converge.tf, which re-runs it during `terraform apply` so that an
-# apply changes the RUNNING box rather than only the next boot. On a first-ever
-# apply those two overlap — the instance answers SSH minutes before its boot-time
-# run has finished — and two copies racing through apt, /etc/vault.d/vault.hcl and
-# `systemctl restart vault` is a real hazard, not a theoretical one.
-#
-# Take an exclusive lock so the second caller waits for the first instead. The fd
-# stays open for the life of the script, so the lock releases on exit however the
-# script ends.
-exec 9>/var/lock/viaduct-startup.lock
-if ! flock -w 900 9; then
-  echo "startup.sh: another run held the lock for 900s; aborting rather than racing it" >&2
-  exit 1
-fi
-
 md() { curl -sf -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/$1"; }
 
 REGION="$(md instance/attributes/region)"

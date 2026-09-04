@@ -28,10 +28,5 @@ resource "terraform_data" "controlplane_ready" {
     }
   }
 
-  # After convergence, so the readiness this reports is the configuration THIS
-  # apply delivered rather than whatever the box happened to boot with.
-  depends_on = [
-    google_compute_instance.controlplane,
-    terraform_data.controlplane_converge,
-  ]
+  depends_on = [google_compute_instance.controlplane]
 }
