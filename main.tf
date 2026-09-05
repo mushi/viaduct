@@ -155,6 +155,29 @@ data "cloudinit_config" "conduit" {
   }
 }
 
+# ── Public IPv4 ───────────────────────────────────────────────────────────────
+# Owned separately from the server so the address has its own lifecycle. Hetzner
+# otherwise auto-creates one per server with auto_delete=true, tying the address to
+# an instance you may rebuild for unrelated reasons.
+#
+# auto_delete = false: a server replace keeps this address. Rotating it is a
+# deliberate, separate act — which is the operation that matters here, because the
+# address is what gets censored, and re-issuing it must not require rebuilding the
+# node (nor rebuilding the node accidentally re-issue it).
+#
+#   terraform apply -replace=hcloud_primary_ip.conduit    # new address
+#
+# `location` must match the server's, or the assignment fails. (`datacenter` also works
+# but is deprecated — Hetzner is phasing datacenters out of the API.)
+resource "hcloud_primary_ip" "conduit" {
+  name        = "conduit-station-ipv4"
+  type        = "ipv4"
+  location    = var.location
+  auto_delete = false
+
+  labels = { role = "conduit-station" }
+}
+
 # ── Server ────────────────────────────────────────────────────────────────────
 
 resource "hcloud_server" "conduit" {
@@ -164,6 +187,13 @@ resource "hcloud_server" "conduit" {
   location     = var.location
   ssh_keys     = [hcloud_ssh_key.conduit.id]
   firewall_ids = [hcloud_firewall.conduit.id]
+
+  # Bind the server to the primary IP above rather than letting Hetzner allocate a
+  # throwaway one. ipv6 is left to Hetzner's default; nothing here uses it.
+  public_net {
+    ipv4_enabled = true
+    ipv4         = hcloud_primary_ip.conduit.id
+  }
 
   # vless_users is intentionally NOT in user_data.
   # It is managed via users.txt uploaded by the provisioner, so that adding
@@ -223,7 +253,13 @@ resource "local_file" "alloy_config" {
 
 resource "terraform_data" "provision" {
   triggers_replace = {
-    server_id  = hcloud_server.conduit.id
+    server_id = hcloud_server.conduit.id
+    # The Reality URIs embed the public address, and xray-setup.sh derives it from the
+    # box's own interface — so a changed IP needs a provisioner run to regenerate
+    # backups/clients/*.txt. Rotating hcloud_primary_ip.conduit does not touch the
+    # server, so without this trigger the apply succeeds and leaves every client URI
+    # pointing at the address you just moved off.
+    server_ip  = hcloud_server.conduit.ipv4_address
     users_hash = sha256(local_file.users_txt.content)
     alloy_hash = sha256(local_file.alloy_config.content)
     # Re-provision (rebuild + redeploy the probe) when any file under probe/

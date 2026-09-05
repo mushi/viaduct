@@ -476,6 +476,12 @@ write_files:
       Description=Obtain TLS cert and start secret-dependent services
       [Service]
       Type=oneshot
+      # Without this the .path unit above retriggers forever: a oneshot deactivates when it
+      # finishes, PathExists is still true, so systemd fires it again. Each pass runs
+      # `systemctl restart nginx`, so nginx exhausts its start limit and stays failed —
+      # observed on a rebuild as 16 triggers and no :80 or :8443. RemainAfterExit keeps the
+      # unit active once it has succeeded, which is what makes the path edge-triggered.
+      RemainAfterExit=yes
       ExecStart=/usr/local/bin/hetzner-secrets-ready.sh
 
   # ── xray-user-stats: per-user traffic exporter ───────────────────────────

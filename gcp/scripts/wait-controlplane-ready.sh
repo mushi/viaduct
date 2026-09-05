@@ -21,13 +21,20 @@ command -v gcloud >/dev/null || { echo "ERROR: gcloud not found; required to rea
 command -v jq     >/dev/null || { echo "ERROR: jq not found; required to parse Vault status." >&2; exit 1; }
 
 GCP_KEY="${GCP_SSH_KEY_PATH/#\~/$HOME}"
-TIMEOUT="${TIMEOUT:-600}"   # seconds; generous for first-boot cloud-init
+# Measured on a rebuild: gate conditions met at 435s, startup script done at 603s.
+# 1800s is ~4x headroom. Overshoot only delays reporting a real failure; undershoot
+# fails a healthy deploy.
+TIMEOUT="${TIMEOUT:-1800}"
 INTERVAL="${INTERVAL:-10}"
 # A rebuild auto-initialises Vault via the startup-script restore within a few
 # minutes, so a brief uninitialised window is transient. Only after Vault stays
 # uninitialised for this long do we treat it as a genuine first-ever deploy that
 # needs a manual `vault operator init`.
-FIRST_DEPLOY_GRACE="${FIRST_DEPLOY_GRACE:-300}"
+#
+# Bounds the restore once Vault is up (measured ~174s). Must stay below TIMEOUT: on
+# expiry this exits 0 advising init, which during a rebuild forks a new Vault
+# instead of restoring.
+FIRST_DEPLOY_GRACE="${FIRST_DEPLOY_GRACE:-900}"
 
 # One IAP SSH per poll: emit the SPIRE unit state, then Vault's status JSON.
 # Single-quoted --command so the $(...) runs on the instance, not locally.

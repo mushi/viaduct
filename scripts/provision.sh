@@ -374,8 +374,14 @@ EOF
   # The agent binary, config, and unit are installed by cloud-init; here we fetch
   # the bundle + a one-time join token from the GCP SPIRE server and start the
   # agent. It dials server_address = 10.99.0.1 (mesh) — hence AFTER the mesh above.
-  if remote "systemctl is-active --quiet spire-agent" 2>/dev/null; then
-    log "SPIRE agent already running — skipping attestation."
+  # Ask whether the agent is ATTESTED, not whether systemd has a process. A crashlooping
+  # unit cycles active -> failed -> activating, so `systemctl is-active` answers differently
+  # depending on the instant it is sampled: on 2026-09-05 it returned true for an agent with
+  # 821 restarts and an expired SVID, the run logged "already running", skipped the mint, and
+  # left the node without an identity. `healthcheck` fails unless the Workload API is serving,
+  # which is exactly the condition that makes re-attestation unnecessary.
+  if remote "/usr/local/bin/spire-agent healthcheck -socketPath /run/spire-agent/public/api.sock >/dev/null 2>&1"; then
+    log "SPIRE agent healthy and attested — skipping attestation."
   else
     log "Fetching SPIRE trust bundle + join token from GCP server ${GCP_INSTANCE} (via IAP)..."
     gcp_ssh "sudo spire-server bundle show" > "${CONTROL_DIR}/bundle.crt"
@@ -431,12 +437,17 @@ EOF
   # to reach the agent, so retry the fetch.
   if [[ -n "$SECRETS_UID" ]]; then
     log "Fetching Hetzner secrets from Vault into tmpfs..."
+    # Ask the unit whether it SUCCEEDED, not whether the files exist. hetzner-secrets is
+    # Type=oneshot with RemainAfterExit=yes, so is-active is true only after a clean run.
+    # `test -s` was checking a tmpfs artifact that outlives the run that wrote it: on
+    # 2026-09-05 it passed against a grafana.env rendered the previous day while the unit
+    # was crashlooping on a failed SVID fetch, and the provisioner reported success.
     for _ in 1 2 3 4 5; do
       remote "systemctl restart hetzner-secrets.service" 2>/dev/null || true
-      remote "test -s /run/hetzner-secrets/grafana.env" && break
+      remote "systemctl is-active --quiet hetzner-secrets.service" && break
       sleep 5
     done
-    if remote "test -s /run/hetzner-secrets/grafana.env" && remote "test -s /run/hetzner-secrets/cloudflare.ini"; then
+    if remote "systemctl is-active --quiet hetzner-secrets.service"; then
       # hetzner-secrets-ready.path is PathExists=, which fires on the file appearing, not on
       # it changing. On a box where grafana.env already existed (the common re-provision) the
       # re-render above adds the Loki variables without retriggering anything, so restart

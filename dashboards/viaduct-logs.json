@@ -602,6 +602,48 @@
       }
     },
     {
+      "id": 35,
+      "type": "logs",
+      "title": "Warning and above \u2014 the actual lines",
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "description": "Drill-down for the stat above: same selector, so the line count here matches it.\n\nThis is journald **priority**, not application severity. A unit that writes its own severity to stdout is tagged `info` by journald no matter what it says, so its warnings appear in that unit's own panel rather than here. What this catches is systemd's own reporting \u2014 a crashlooping unit shows up as repeated `<unit>: Failed with result 'exit-code'` from `init.scope`, which is the fastest way to spot one.",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "{node=~\"$node\", level=~\"emerg|alert|crit|err|warning\"} |~ `(?i)$search`",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    },
+    {
       "id": 9,
       "type": "row",
       "title": "Volume & cost",
@@ -610,7 +652,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 23
       },
       "panels": []
     },
@@ -679,7 +721,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 15
+        "y": 24
       }
     },
     {
@@ -747,7 +789,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 15
+        "y": 24
       }
     },
     {
@@ -847,7 +889,7 @@
         "h": 9,
         "w": 13,
         "x": 0,
-        "y": 23
+        "y": 32
       }
     },
     {
@@ -910,7 +952,7 @@
         "h": 9,
         "w": 11,
         "x": 13,
-        "y": 23
+        "y": 32
       }
     },
     {
@@ -922,7 +964,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 33
+        "y": 42
       },
       "panels": []
     },
@@ -994,7 +1036,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 34
+        "y": 43
       }
     },
     {
@@ -1065,7 +1107,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 34
+        "y": 43
       }
     },
     {
@@ -1166,7 +1208,7 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 43
+        "y": 52
       }
     },
     {
@@ -1208,7 +1250,7 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 43
+        "y": 52
       }
     },
     {
@@ -1250,7 +1292,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 53
+        "y": 62
       }
     },
     {
@@ -1262,7 +1304,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 61
+        "y": 70
       },
       "panels": []
     },
@@ -1305,7 +1347,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 62
+        "y": 71
       }
     },
     {
@@ -1347,7 +1389,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 62
+        "y": 71
       }
     },
     {
@@ -1389,13 +1431,13 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 70
+        "y": 79
       }
     },
     {
       "type": "logs",
       "title": "SPIRE agents & k3s errors",
-      "description": "Agent attestation and SVID rotation across both trust domains, plus anything k3s logs at error level. `logfmt` then a label filter is the idiomatic way to drop k3s's very chatty info-level COMPACT stream without a brittle line match.",
+      "description": "Agent attestation and SVID rotation across both trust domains, plus k3s at error level.\n\nFilters `level_extracted`, not `level`. These units write structured severity to stdout, so journald tags every line priority `info` and the stream label `level` is always \"info\" regardless; `| logfmt` therefore lands the real severity in `level_extracted`. Measured over one hour: 978 info, 534 warning, 55 error \u2014 all with stream `level=info`. Filtering the stream label reads none of them.",
       "targets": [
         {
           "refId": "A",
@@ -1403,7 +1445,7 @@
             "type": "loki",
             "uid": "${DS_LOKI}"
           },
-          "expr": "{node=~\"$node\", unit=~\"spire-agent.service|k3s.service\"} | logfmt | level =~ `error|warning|warn`",
+          "expr": "{node=~\"$node\", unit=~\"spire-agent.service|k3s.service\"} | logfmt | level_extracted =~ `error|warning|warn`",
           "editorMode": "code",
           "queryType": "range"
         }
@@ -1431,7 +1473,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 70
+        "y": 79
       }
     },
     {
@@ -1443,7 +1485,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 79
+        "y": 88
       },
       "panels": []
     },
@@ -1486,7 +1528,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 80
+        "y": 89
       }
     },
     {
@@ -1585,7 +1627,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 80
+        "y": 89
       }
     },
     {
@@ -1597,7 +1639,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 90
+        "y": 99
       },
       "panels": []
     },
@@ -1716,7 +1758,7 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 91
+        "y": 100
       }
     },
     {
@@ -1856,7 +1898,7 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 91
+        "y": 100
       }
     },
     {
@@ -1985,7 +2027,7 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 101
+        "y": 110
       }
     },
     {
@@ -2103,7 +2145,7 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 101
+        "y": 110
       }
     },
     {
@@ -2115,7 +2157,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 112
+        "y": 121
       },
       "panels": []
     },
@@ -2158,7 +2200,7 @@
         "h": 14,
         "w": 24,
         "x": 0,
-        "y": 113
+        "y": 122
       }
     }
   ]

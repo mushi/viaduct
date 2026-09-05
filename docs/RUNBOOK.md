@@ -261,6 +261,81 @@ k3s releases**, so expect it to need refreshing more often than the version.
 **Vault audit log.** `/var/log/vault/audit.log` on the control plane, rotated daily/64 MB,
 14 kept. It shares the 30 GB boot disk.
 
+## Rotating the Hetzner public IP
+
+Do this when censors block the address: users see the client connect then drop
+immediately, while `xray_user_*` traffic collapses to a few KB/day (handshake only)
+rather than to zero. Zero would mean the IP is null-routed; a trickle means DPI is
+tearing the flow down after fingerprinting it.
+
+**Preserved by either route** — the Reality keypair and `SHORT_ID` (`backups/keypair.env`),
+every client UUID, and the Psiphon identity (`backups/conduit_key.json`, so broker
+reputation survives). Only the address changes, so a user can edit the IP in their
+existing `-reality` URI rather than re-importing. Confirm `backups/` is intact first:
+it is the only copy, and both routes destroy something.
+
+The `-xhttp` URI uses the domain, not the IP, so it is unaffected.
+
+### Route A — same location, rotate the IP only
+
+~2 min downtime. The new address comes from the same location's pool, so it may sit
+near the blocked one — prefer Route B if the block might be subnet-wide.
+
+Hetzner rejects assigning a Primary IP to a running server (`422 server_not_stopped`)
+or to one that already has an IPv4 (`422 server_has_ipv4`), so the swap must happen
+with the server off. Terraform cannot sequence that, hence the CLI steps.
+
+```sh
+terraform apply -replace=hcloud_primary_ip.conduit   # allocate the new address
+hcloud primary-ip list                               # note new ID; OLD_ID is the unassigned one
+
+hcloud server poweroff conduit-station
+hcloud primary-ip unassign <OLD_ID>
+hcloud primary-ip assign <NEW_ID> --server conduit-station
+hcloud primary-ip delete <OLD_ID>                    # in this window: delete also needs the server off
+hcloud server poweron conduit-station
+
+terraform apply                                      # reconciles state, regenerates client URIs
+```
+
+### Route B — change location (also gives a new IP)
+
+~10 min downtime, full rebuild. Preferred when escaping a block: the address comes
+from a different location's range. Mechanically simpler — the server is *replaced*, so
+it is created with the new Primary IP already attached and neither 422 applies.
+
+Primary IPs are location-bound and cannot move, so `hcloud_primary_ip.conduit` and
+`hcloud_server.conduit` both read `var.location` and are replaced together.
+
+```sh
+hcloud server-type describe cx23 | grep -A2 Pricing   # confirm cx23 exists in the target location
+```
+Set `location` in `terraform.tfvars` (`nbg1 fsn1 hel1 ash sin`; EU only for latency to
+Iran), then:
+```sh
+terraform apply
+```
+
+The old server's Primary IP is auto-deleted with it — no orphan to clean up.
+
+### After either route
+
+```sh
+terraform output          # new IP
+hcloud primary-ip list    # confirm exactly one, assigned, no orphan billing hourly
+```
+
+1. Update the Cloudflare **A** record for `vless_domain` to the new IP, DNS-only (grey cloud).
+2. Send each user their regenerated `backups/clients/<name>.txt`. The provisioner rewrites
+   these automatically — `terraform_data.provision` triggers on `server_ip`, and
+   `xray-setup.sh --regen` reads the address from the box's own interface.
+3. Verify: `curl -s https://<domain>` (nginx decoy), and that the user reconnects.
+
+If the new address is blocked within days, the censor is matching on protocol
+behaviour rather than the address; rotating again will not help. Change `vless_sni`
+(currently spoofing `google.com`) instead — that invalidates existing client configs,
+so change one variable at a time or you will not know which fixed it.
+
 ## Alerts to configure
 
 Three conditions keep the system running rather than failing, so nothing surfaces them:
