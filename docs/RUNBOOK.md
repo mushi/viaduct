@@ -345,6 +345,40 @@ Three conditions keep the system running rather than failing, so nothing surface
 | `aws_egress_state_persisted == 0` | The guardrail cannot write state, so **the egress cap is not being enforced** |
 | `aws_egress_throttled == 1` sustained | Something is spending the egress budget; the AWS node is shaped and still serving |
 | Vault file audit device erroring | Vault keeps serving via syslog, but the forensic log is being lost |
+| A user's traffic collapses against its own baseline | Their route is blocked, or they left — either way you need to ask |
+
+**User drop-off.** Detection otherwise depends on the user reporting it, and they may not:
+MZ was blocked for weeks and said nothing, because silence looks the same as a user who
+found something better. The alert does not diagnose, it prompts you to ask.
+
+Prometheus, matching the dead man's switch conventions (folder `fn6bm6`, group
+`Viaduct evaluation group`, receiver `Viaduct`), instant query, threshold `> 0`, `for: 6h`:
+
+```promql
+(
+  sum by (user) (increase(xray_user_downlink_bytes_total{job="xray_user_stats"}[24h]))
+  /
+  (sum by (user) (increase(xray_user_downlink_bytes_total{job="xray_user_stats"}[7d] offset 24h)) / 7)
+  < 0.05
+)
+and
+(sum by (user) (increase(xray_user_downlink_bytes_total{job="xray_user_stats"}[7d] offset 24h)) / 7) > 50e6
+```
+
+The baseline is offset by 24h so the window being tested is excluded from what it is compared
+against — otherwise a long outage decays its own baseline and the alert silently resolves while
+still broken. The `> 50e6` floor (50 MB/day) keeps light users from firing on an idle day;
+`for: 6h` means roughly 30h of silence before it pages. Both are worth tuning once you have a
+week of steady data.
+
+Expect noise for a week after any rebuild: counters reset, and `increase()` over a window
+spanning the reset is not comparable to one that does not.
+
+This says nothing about *why*. Bytes are the only per-user metric xray exposes — there is no
+connection count — so a blocked user (connects, authenticates, torn down, a few KB/day) and a
+departed user (nothing at all) look similar. Distinguishing them takes one look at the
+dashboard: a trickle rather than a flat zero means their client is still trying.
+
 
 ## Day-to-day on the Hetzner node
 
