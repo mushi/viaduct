@@ -311,15 +311,20 @@ resource "aws_instance" "spire" {
 
   # Uniform -replace model across all three roots (GCP, Hetzner, AWS): a boot-script
   # edit never auto-rebuilds. ignore_changes on user_data_base64 mirrors Hetzner's
-  # ignore_changes=[user_data], so a plain apply ignores startup-script drift. To
-  # apply an edited startup script, rebuild explicitly:
+  # ignore_changes=[user_data], so a plain apply ignores startup-script drift.
+  # ami is ignored for the same reason: data.aws_ami is most_recent, so every new
+  # Canonical release would otherwise make a plain apply destroy and rebuild the node
+  # (including a stopped one, whose on-disk journal goes with it). ignore_changes only
+  # suppresses diffs on an existing instance; a replacement is built from the full
+  # config, so a rebuild still picks up the newest AMI. To apply an edited startup
+  # script or move to a newer AMI, rebuild explicitly:
   #   terraform apply -replace=aws_instance.spire
   # What survives a rebuild: the CA private keys persist in KMS, but the CA journal
   # lives in the ephemeral sqlite datastore, so a rebuild mints a FRESH viaduct.aws
   # CA and the trust bundle changes (the old KMS keys orphan and auto-prune). The
   # federation-sync terraform_data re-pushes the new bundle to GCP.
   lifecycle {
-    ignore_changes = [user_data_base64]
+    ignore_changes = [user_data_base64, ami]
   }
 }
 

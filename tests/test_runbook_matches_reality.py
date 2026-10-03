@@ -36,7 +36,7 @@ class RunbookTest(unittest.TestCase):
         """Anchor: an empty file would satisfy every assertNotIn below."""
         self.assertGreater(len(self.text), 5000)
         for heading in ("## If an apply or boot stops", "## Routine maintenance",
-                        "## Alerts to configure", "## Day-to-day on the Hetzner node"):
+                        "## Alerts", "## Day-to-day on the Hetzner node"):
             self.assertIn(heading, self.text, f"{heading} is missing")
 
     def test_the_host_key_reset_variable_exists(self):

@@ -11,7 +11,9 @@ be up and its readiness gate returned before the spokes, which authenticate into
 
 **Rebuild one node.** A boot-script edit never rebuilds on a plain apply (GCP's startup
 script is in instance metadata; Hetzner and AWS keep `user_data` under `ignore_changes`).
-Rebuild explicitly:
+Nor does a new Ubuntu release on AWS: `ami` is under `ignore_changes` too, and a `-replace`
+picks up the newest AMI (`terraform output latest_ami_id` vs `ami_id` shows whether one is
+waiting). Rebuild explicitly:
 
 | Node | Command                                                                   |
 |---|---------------------------------------------------------------------------|
@@ -336,40 +338,50 @@ behaviour rather than the address; rotating again will not help. Change `vless_s
 (currently spoofing `google.com`) instead — that invalidates existing client configs,
 so change one variable at a time or you will not know which fixed it.
 
-## Alerts to configure
+## Alerts
 
-Three conditions keep the system running rather than failing, so nothing surfaces them:
+Alert rules are code, in the `grafana/` root. Several conditions keep the system running
+rather than failing, and a guardrail stop leaves the AWS node down with nothing else to
+say so, so these rules are the only notice:
 
-| Signal | Meaning |
-|---|---|
-| `aws_egress_state_persisted == 0` | The guardrail cannot write state, so **the egress cap is not being enforced** |
-| `aws_egress_throttled == 1` sustained | Something is spending the egress budget; the AWS node is shaped and still serving |
-| Vault file audit device erroring | Vault keeps serving via syslog, but the forensic log is being lost |
-| A user's traffic collapses against its own baseline | Their route is blocked, or they left — either way you need to ask |
+| Rule (group) | Fires on | Meaning |
+|---|---|---|
+| AWS node silent (`Viaduct AWS egress`) | no `aws_mtd_egress_reading_valid` for ~30 min | Stopped (the egress guardrail at the cap, which nothing restarts), crashed, or Alloy not shipping |
+| AWS egress near cap | MTD egress > 90% of `aws_egress_cap_bytes` | The guardrail stops the node on two consecutive readings over the cap |
+| AWS egress throttled | `aws_egress_throttled == 1` for 1h | Something is spending the egress budget; the node is shaped and still serving |
+| AWS egress reading unavailable | `aws_mtd_egress_reading_valid == 0` for 1h | CloudWatch cannot be read, so **the egress cap is not being enforced** |
+| AWS egress state not persisted | `aws_egress_state_persisted == 0` for 30m | The guardrail cannot write state, so **the egress cap is not being enforced** |
+| AWS egress reading implausible | `aws_mtd_egress_reading_plausible == 0` | A >20 GB jump in one window; the stop is withheld on it |
+| User traffic collapsed (`Viaduct users`) | a user's 24h downlink < 5% of their own 7-day daily average, for 6h | Their route is blocked, or they left — either way you need to ask |
+
+Every rule notifies the `Viaduct` contact point. The contact point and the dead man's switch
+group (`Viaduct evaluation group`, folder `fn6bm6`) stay UI-managed; Terraform owns only the
+two groups above. Keep their names distinct from any UI group: a rule group is written whole,
+so a same-named Terraform group would replace the rules already in it.
+
+Apply (needs a service account token with the Editor role):
+
+```sh
+cd grafana && cp terraform.tfvars.example terraform.tfvars   # fill in grafana_url + grafana_auth
+terraform init && terraform apply
+```
+
+Rules applied this way are read-only in the UI; change them in `grafana/main.tf`. To bring
+a UI rule under code, export its group (Alerting → the group → Export → Terraform), add it
+to `grafana/`, and `terraform import grafana_rule_group.<name> '<folder_uid>:<group name>'`.
+
+Still UI-only: **Vault file audit device erroring** — Vault keeps serving via syslog, but the
+forensic log is being lost. There is no metric for it yet.
 
 **User drop-off.** Detection otherwise depends on the user reporting it, and they may not:
 MZ was blocked for weeks and said nothing, because silence looks the same as a user who
-found something better. The alert does not diagnose, it prompts you to ask.
-
-Prometheus, matching the dead man's switch conventions (folder `fn6bm6`, group
-`Viaduct evaluation group`, receiver `Viaduct`), instant query, threshold `> 0`, `for: 6h`:
-
-```promql
-(
-  sum by (user) (increase(xray_user_downlink_bytes_total{job="xray_user_stats"}[24h]))
-  /
-  (sum by (user) (increase(xray_user_downlink_bytes_total{job="xray_user_stats"}[7d] offset 24h)) / 7)
-  < 0.05
-)
-and
-(sum by (user) (increase(xray_user_downlink_bytes_total{job="xray_user_stats"}[7d] offset 24h)) / 7) > 50e6
-```
-
-The baseline is offset by 24h so the window being tested is excluded from what it is compared
-against — otherwise a long outage decays its own baseline and the alert silently resolves while
-still broken. The `> 50e6` floor (50 MB/day) keeps light users from firing on an idle day;
-`for: 6h` means roughly 30h of silence before it pages. Both are worth tuning once you have a
-week of steady data.
+found something better. The alert does not diagnose, it prompts you to ask. The baseline is
+offset by 24h so the window being tested is excluded from what it is compared against —
+otherwise a long outage decays its own baseline and the alert silently resolves while still
+broken. The `count by (user)` wrapper makes a total collapse (ratio exactly 0, a null-routed
+address) fire like a partial one. The 50 MB/day floor keeps light users from firing on an
+idle day; with `for: 6h` that is roughly 30h of silence before it pages. Both are worth
+tuning once you have a week of steady data.
 
 Expect noise for a week after any rebuild: counters reset, and `increase()` over a window
 spanning the reset is not comparable to one that does not.
@@ -440,6 +452,7 @@ keys (the temporary init token is invalidated by the restore). Do not run
 Tear the data-plane nodes down first, control plane last:
 
 ```sh
+(cd grafana && terraform apply -var aws_node_present=false)   # drop the AWS rules first, or 'AWS node silent' pages forever
 cd aws && terraform destroy      # then delete the SPIRE CA in AWS KMS (see note)
 terraform destroy                # Hetzner (repo root)
 cd gcp && terraform destroy      # stops short of the prevent_destroy unseal key + bucket (see note)

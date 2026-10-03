@@ -69,14 +69,37 @@ gcp_ssh() {
 # then SendCommand returns InvalidInstanceId), and user_data must reach §11 to
 # write wg0.pub. Poll until both hold: a failed send-command OR an empty result
 # just means "not ready yet". ~15 min budget.
+#
+# A boot script that has already failed will never write wg0.pub, so the probe also
+# asks cloud-init whether it has finished. Finished without a key means the boot
+# aborted (a fail-closed digest pin, typically): report its FATAL lines and stop now,
+# rather than spending the whole budget and blaming SSM.
+PROBE='if [ -s /etc/wireguard/wg0.pub ]; then cat /etc/wireguard/wg0.pub;
+elif cloud-init status 2>/dev/null | grep -qE "^status: (error|done|degraded)"; then
+  echo BOOT_FAILED
+  l="$(grep -E "FATAL|ERROR" /var/log/cloud-init-output.log 2>/dev/null | tail -n 5)"
+  if [ -n "$l" ]; then printf "%s\n" "$l"; else tail -n 8 /var/log/cloud-init-output.log 2>/dev/null; fi
+fi'
 log "Waiting for the AWS box to be SSM-ready and for cloud-init to write wg0.pub..."
 AWS_PUB=""
 for _ in $(seq 1 60); do
-  AWS_PUB="$(ssm_run 'cat /etc/wireguard/wg0.pub 2>/dev/null || true' 2>/dev/null | tr -d '[:space:]' || true)"
+  OUT="$(ssm_run "$PROBE" 2>/dev/null || true)"
+  if [ "$(printf '%s\n' "$OUT" | head -n 1)" = "BOOT_FAILED" ]; then
+    log "ERROR: the AWS box's boot script failed, so wg0.pub will never be written:"
+    # Box-authored text reaches the operator's terminal: strip control characters so it
+    # cannot carry escape sequences.
+    printf '%s\n' "$OUT" | sed 1d | LC_ALL=C tr -d '\000-\010\013-\037\177' | sed 's/^/      /'
+    log "  Fix the cause (docs/RUNBOOK.md, \"If an apply or boot stops\"), then rebuild:"
+    log "    terraform apply -replace=aws_instance.spire"
+    log "  A plain apply re-runs this join against the same failed box. Full log on the box:"
+    log "    /var/log/cloud-init-output.log (aws ssm start-session --target ${AWS_INSTANCE_ID})"
+    exit 1
+  fi
+  AWS_PUB="$(printf '%s' "$OUT" | tr -d '[:space:]')"
   [ -n "$AWS_PUB" ] && break
   sleep 15
 done
-[ -n "$AWS_PUB" ] || { log "ERROR: AWS box not SSM-ready or wg0.pub absent after ~15min. Check the SSM agent registration and user_data (§11)."; exit 1; }
+[ -n "$AWS_PUB" ] || { log "ERROR: AWS box not SSM-ready after ~15min (cloud-init never reported finishing). Check the SSM agent registration: aws ssm describe-instance-information."; exit 1; }
 
 # The `tr -d '[:space:]'` above normalizes the SSM stdout; it is NOT a security
 # control. It deletes literal whitespace but leaves ';', '&', '|', backticks and

@@ -131,7 +131,7 @@ variable "k3s_installer_sha256" {
     scripts/get-checksums.sh, read the diff, then update the pin.
   EOT
   type        = string
-  default     = "ed01f89fd977bf20ac1516bbebf8370bf3ddbaa55dac8aba610956a4c78cc00b"
+  default     = "e5cc3b3d9dfc1662c2d9be6da5abc9a4cd317d6abc3a5ffc02e3dd3248207fee"
 }
 
 variable "awscli_version" {

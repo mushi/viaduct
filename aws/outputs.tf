@@ -29,6 +29,11 @@ output "trust_domain" {
 }
 
 output "ami_id" {
-  description = "Resolved Ubuntu 24.04 ARM64 AMI."
+  description = "Ubuntu 24.04 ARM64 AMI the running instance was built from (ami is under ignore_changes)."
+  value       = aws_instance.spire.ami
+}
+
+output "latest_ami_id" {
+  description = "Newest Ubuntu 24.04 ARM64 AMI; differs from ami_id when a -replace would move to a newer image."
   value       = data.aws_ami.ubuntu.id
 }
