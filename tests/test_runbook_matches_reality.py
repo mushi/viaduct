@@ -39,6 +39,15 @@ class RunbookTest(unittest.TestCase):
                         "## Alerts", "## Day-to-day on the Hetzner node"):
             self.assertIn(heading, self.text, f"{heading} is missing")
 
+    def test_every_aws_output_the_runbook_reads_exists(self):
+        names = set(re.findall(r"terraform output -raw ([a-z_]+)", self.text))
+        self.assertTrue(names, "anchor: no terraform output commands found")
+        outputs = (REPO_ROOT / "aws" / "outputs.tf").read_text()
+        for name in names:
+            with self.subTest(output=name):
+                self.assertIn(f'output "{name}"', outputs,
+                              f"the runbook reads terraform output {name}, which aws/ does not define")
+
     def test_the_host_key_reset_variable_exists(self):
         self.assertIn("VIADUCT_HOST_KEY_RESET=1", self.text)
         self.assertIn("VIADUCT_HOST_KEY_RESET",

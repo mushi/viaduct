@@ -156,7 +156,8 @@ Terraform-managed, reapply after a rebuild).
 
 Every node's **Grafana Alloy** scrapes local exporters and remote-writes to Grafana
 Cloud, labelled by node: Conduit usage → the [MoaV dashboard](https://github.com/shayanb/MoaV/blob/main/configs/monitoring/grafana/provisioning/dashboards/conduit.json), VLESS per-user stats →
-`dashboards/vless-xray-dashboard.json`, node metrics → Node Exporter (1860). A blackbox
+`grafana/dashboards/vless-xray-dashboard.json`, node metrics → Node Exporter (1860). The Viaduct
+dashboards and alert rules are managed as code in `grafana/`. A blackbox
 **availability probe** exercises the VLESS/Reality path each minute and exposes SLIs on
 `:9110`; a dead-man's-switch alert fires if a node stops reporting. AWS egress headroom
 ships as `aws_mtd_egress_bytes` / `aws_egress_cap_bytes`. Vault / SPIRE / k3s telemetry is

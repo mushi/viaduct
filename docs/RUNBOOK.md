@@ -354,10 +354,12 @@ say so, so these rules are the only notice:
 | AWS egress reading implausible | `aws_mtd_egress_reading_plausible == 0` | A >20 GB jump in one window; the stop is withheld on it |
 | User traffic collapsed (`Viaduct users`) | a user's 24h downlink < 5% of their own 7-day daily average, for 6h | Their route is blocked, or they left — either way you need to ask |
 
-Every rule notifies the `Viaduct` contact point. The contact point and the dead man's switch
-group (`Viaduct evaluation group`, folder `fn6bm6`) stay UI-managed; Terraform owns only the
-two groups above. Keep their names distinct from any UI group: a rule group is written whole,
-so a same-named Terraform group would replace the rules already in it.
+Every rule notifies the `Viaduct` contact point. The `grafana/` root also owns the dead man's
+switch (`Viaduct evaluation group`), the notification policy tree, the `Alerting rules` and
+`viaduct` folders, and every Viaduct dashboard (the JSON in `grafana/dashboards/`). The contact point
+stays UI-managed and is referenced by name, so its integration URL never enters code or state.
+A rule group is written whole, so keep group names unique: two definitions of one name would
+overwrite each other.
 
 Apply (needs a service account token with the Editor role):
 
@@ -366,16 +368,17 @@ cd grafana && cp terraform.tfvars.example terraform.tfvars   # fill in grafana_u
 terraform init && terraform apply
 ```
 
-Rules applied this way are read-only in the UI; change them in `grafana/main.tf`. To bring
-a UI rule under code, export its group (Alerting → the group → Export → Terraform), add it
-to `grafana/`, and `terraform import grafana_rule_group.<name> '<folder_uid>:<group name>'`.
+Everything this root manages is code-first. Rules and the policy tree are read-only in the UI;
+change them in `grafana/`. Dashboards stay editable in the UI, but the next apply reverts any
+edit not copied back to `grafana/dashboards/` (see `grafana/dashboards.tf`), so a plan that wants to
+change a dashboard means a UI edit was never exported. To bring a new UI rule group under code,
+export it (Alerting → the group → Export → Terraform), add it to `grafana/`, and adopt it with
+an `import` block, id `<folder_uid>:<group name>`.
 
 Still UI-only: **Vault file audit device erroring** — Vault keeps serving via syslog, but the
 forensic log is being lost. There is no metric for it yet.
 
-**User drop-off.** Detection otherwise depends on the user reporting it, and they may not:
-MZ was blocked for weeks and said nothing, because silence looks the same as a user who
-found something better. The alert does not diagnose, it prompts you to ask. The baseline is
+**User drop-off.** Detection otherwise depends on the user reporting it, and they may not. The alert does not diagnose, it prompts you to ask. The baseline is
 offset by 24h so the window being tested is excluded from what it is compared against —
 otherwise a long outage decays its own baseline and the alert silently resolves while still
 broken. The `count by (user)` wrapper makes a total collapse (ratio exactly 0, a null-routed
@@ -446,6 +449,29 @@ same sequence as the [restore block in `startup.sh`](../gcp/scripts/startup.sh#L
 (the `6a. Restore` section), authenticating after the restore with your **offline** recovery
 keys (the temporary init token is invalidated by the restore). Do not run
 `vault operator init` and stop there: that forks a new empty Vault instead of restoring.
+
+**AWS node stopped by the egress guardrail.** The guardrail stops the instance after two
+consecutive readings over the 90 GB/month cap, and nothing starts it again. "AWS node silent"
+fires; confirm the cause in Loki with `{node="aws", unit="egress-guardrail.service"} |= "CAP EXCEEDED"`.
+
+Start it only once a new month has begun. The guardrail keeps its last reading on disk
+(`/var/lib/viaduct-guardrail/last`) and that reading is over the cap, so a start in the same
+month meets a second over-cap reading within 15 minutes and stops again. From the 1st,
+CloudWatch's month-to-date sum resets and the node stays up.
+
+```sh
+cd aws
+aws ec2 start-instances --region ap-south-1 --instance-ids "$(terraform output -raw instance_id)"
+aws ec2 wait instance-running --region ap-south-1 --instance-ids "$(terraform output -raw instance_id)"
+```
+
+A stop/start keeps the disk and the Elastic IP, so nothing else is needed: no mesh re-join,
+no federation push. "AWS node silent" resolves within a few minutes. To check the node, open
+`aws ssm start-session --region ap-south-1 --target "$(terraform output -raw instance_id)"`
+and run `sudo wg show wg0 latest-handshakes; systemctl is-active spire-server spire-agent k3s`.
+
+Do not `terraform apply` to bring it back: Terraform does not start a stopped instance, and
+the apply would only carry whatever else is pending.
 
 ## Teardown
 

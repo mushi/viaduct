@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars and fill in your values.
+# terraform.tfvars is gitignored, do not commit it.
+
+# ── Required ──────────────────────────────────────────────────────────────────
+grafana_url  = "https://<stack>.grafana.net"
+grafana_auth = "glsa_…" # service account token, Editor role; or export TF_VAR_grafana_auth
+
+# ── Optional (defaults shown; uncomment to override) ──────────────────────────
+# contact_point             = "Viaduct"           # existing, UI-managed
+# prometheus_datasource_uid = "grafanacloud-prom"
+# aws_node_present          = true                # false before destroying aws/
