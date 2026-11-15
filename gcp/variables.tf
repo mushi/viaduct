@@ -27,12 +27,6 @@ variable "machine_type" {
   default     = "e2-micro"
 }
 
-variable "boot_image" {
-  description = "Boot disk image (project/family shorthand)."
-  type        = string
-  default     = "ubuntu-os-cloud/ubuntu-2604-lts-amd64"
-}
-
 variable "allow_stopping_for_update" {
   description = "Permit Terraform to stop and start the instance to apply changes that require it (machine_type, shielded/secure-boot config, service account). Default false so a stop is always a deliberate opt-in. The control-plane readiness gate confirms Vault and SPIRE come back after the restart."
   type        = bool
@@ -64,21 +58,6 @@ variable "aws_spire_ip" {
 
 variable "snapshot_bucket_name" {
   description = "Globally-unique name for the Vault Raft snapshot bucket."
-  type        = string
-}
-
-variable "vault_version" {
-  description = "Vault apt package version to pin and hold (e.g. \"1.18.5-1\"). Verify the available version with `apt-cache madison vault` after adding the HashiCorp repo, or check HashiCorp releases."
-  type        = string
-}
-
-variable "spire_version" {
-  description = "SPIRE release version, e.g. \"1.16.0\" (downloads the linux-amd64-musl tarball; musl builds are static and run on Ubuntu)."
-  type        = string
-}
-
-variable "spire_sha256" {
-  description = "SHA-256 of spire-<version>-linux-amd64-musl.tar.gz, from the GitHub release."
   type        = string
 }
 
@@ -118,14 +97,3 @@ variable "wg_ingress_cidrs" {
   default     = ["0.0.0.0/0"]
 }
 
-variable "alloy_version" {
-  description = "Grafana Alloy release tag for the control-plane log shipper (linux-amd64.zip). Match the data-plane alloy_version."
-  type        = string
-  default     = "v1.21.3"
-}
-
-variable "alloy_amd64_sha256" {
-  description = "SHA-256 of alloy-linux-amd64.zip for alloy_version (the same value as the root module's alloy_zip_sha256, since GCP is amd64). Leave empty to disable the control-plane log shipper. Run ../scripts/get-checksums.sh to obtain."
-  type        = string
-  default     = ""
-}

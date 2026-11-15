@@ -247,18 +247,27 @@ Gives you Vault, SPIRE, and Hetzner admin over `wg0` instead of public paths.
 
 ## Routine maintenance
 
-**Pins.** Seven values pin what the nodes download. A boot deliberately fails closed on a mismatch. 
-Refresh them, read the diff, commit:
+**Pins.** Every version and digest the nodes download or boot (the Ubuntu release, release
+binaries, container images, the Vault apt version) lives in one committed file, `pins.json`,
+read by all three Terraform roots and the AWS manifests. A boot fails closed on a digest
+mismatch. To move a version, edit it in `pins.json`, then:
 
 ```sh
-./scripts/get-checksums.sh   # prints every pin ready to paste, and flags newer upstream releases
+./scripts/get-checksums.sh --write   # re-derives every digest for the pinned versions and records changes
+git diff pins.json                   # read it before committing
 ```
 
-`conduit_sha256`, `xray_zip_sha256`, `alloy_zip_sha256`, `xray_exporter_sha256`,
-`geoip_sha256`, `geosite_sha256` (+ `geoip_version`, `geosite_version`) go in the repo-root
-`terraform.tfvars`; `k3s_installer_sha256`, `awscli_zip_sha256` (+ `awscli_version`) go in
-`aws/terraform.tfvars`. The **k3s installer pin moves on upstream's editing schedule, not on
-k3s releases**, so expect it to need refreshing more often than the version.
+Without `--write` the script only verifies, and exits non-zero if any pin differs from
+upstream. It reads the GitHub API, which allows 60 unauthenticated requests an hour; export
+`GITHUB_TOKEN` if it reports the limit. The **k3s installer pin moves on upstream's editing
+schedule, not on k3s releases**, so expect it to need refreshing more often than the version;
+read upstream's `install.sh` diff before recording a new one.
+
+**OS baseline.** What every node's boot does to Ubuntu before anything else (GNU coreutils,
+security and kernel updates, the 03:30 reboot policy, the WireGuard AppArmor rule) is defined
+once, in `scripts/lib/os-baseline.sh`, and shipped to each node (GCP metadata, AWS user_data,
+Hetzner cloud-init). Moving to a new Ubuntu release is a change to `ubuntu` in `pins.json`
+and, if the release breaks the boot, to that one file.
 
 **Vault audit log.** `/var/log/vault/audit.log` on the control plane, rotated daily/64 MB,
 14 kept. It shares the 30 GB boot disk.

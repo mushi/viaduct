@@ -43,18 +43,6 @@ variable "trust_domain" {
 }
 
 # ─── SPIRE server (consumed in Phase A2) ─────────────────────────────────────
-variable "spire_version" {
-  description = "SPIRE release version. Downloads the linux-arm64-musl tarball for Graviton (static; runs on Ubuntu)."
-  type        = string
-  default     = "1.16.0"
-}
-
-variable "spire_sha256" {
-  description = "SHA-256 of spire-<version>-linux-arm64-musl.tar.gz (NOTE: arm64, not amd64)."
-  type        = string
-  default     = ""
-}
-
 # ─── Cross-cloud federation / provisioning (consumed by startup.sh.tpl) ────────
 variable "gcp_control_plane_ip" {
   description = "GCP control-plane IP (Vault :8200 + SPIRE federation bundle endpoint :8443). Deploy gcp/ first to obtain it."
@@ -117,31 +105,3 @@ variable "gcp_trust_domain" {
   default     = "viaduct.gcp"
 }
 
-variable "k3s_version" {
-  description = "Pinned k3s version (INSTALL_K3S_VERSION), e.g. v1.37.2+k3s1."
-  type        = string
-  default     = "v1.37.2+k3s1"
-}
-
-variable "k3s_installer_sha256" {
-  description = <<-EOT
-    SHA-256 of the https://get.k3s.io installer script, verified before it is
-    executed as root. Upstream edits this script independently of k3s releases,
-    so a boot that fails on a mismatch is the intended behaviour: re-run
-    scripts/get-checksums.sh, read the diff, then update the pin.
-  EOT
-  type        = string
-  default     = "c2a2643dd7c259121a876d16538844c60928de3d38ae98f22f7b95a7ffcfab9d"
-}
-
-variable "awscli_version" {
-  description = "Pinned aws-cli v2 version. The unversioned zip URL moves, so no digest can describe it."
-  type        = string
-  default     = "2.40.1"
-}
-
-variable "awscli_zip_sha256" {
-  description = "SHA-256 of awscli-exe-linux-aarch64-<awscli_version>.zip, verified before it is unpacked and run as root."
-  type        = string
-  default     = "ce999da382eac247be6bd000af1ee16f23a2d25e5906e7fd9a83e54c1ecf37c1"
-}

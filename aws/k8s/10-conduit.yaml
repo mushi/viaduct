@@ -26,14 +26,14 @@ spec:
         fsGroup: 65532          # PVC + emptyDir group-owned by the non-root conduit uid so it can write /data
       initContainers:
       - name: fetch-conduit
-        image: alpine@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf # 3.24.4
+        image: ${images.alpine}
         command: ["/bin/sh", "-c"]
         args:
         - |
           set -e
           apk add --no-cache curl >/dev/null
-          curl -fsSL -o /shared/conduit https://github.com/Psiphon-Inc/conduit/releases/download/release-cli-2.1.0/conduit-linux-arm64
-          echo "41d33d3a7c6288a4ae62c17f01d0667034d8757c26259e338a22544701528227  /shared/conduit" | sha256sum -c -
+          curl -fsSL -o /shared/conduit https://github.com/Psiphon-Inc/conduit/releases/download/${conduit_version}/conduit-linux-arm64
+          echo "${conduit_arm64_sha256}  /shared/conduit" | sha256sum -c -
           chmod +x /shared/conduit
         resources:
           requests: { memory: 32Mi, cpu: 50m }
@@ -46,7 +46,7 @@ spec:
         volumeMounts: [{ name: shared, mountPath: /shared }]
       containers:
       - name: conduit
-        image: alpine@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf # 3.24.4
+        image: ${images.alpine}
         command: ["/shared/conduit", "start", "--data-dir", "/data", "--bandwidth", "15", "--max-common-clients", "5", "--metrics-addr", ":9090"]
         ports: [{ name: metrics, containerPort: 9090 }]
         resources:

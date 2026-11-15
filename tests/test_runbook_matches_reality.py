@@ -10,6 +10,7 @@ These assert the claims against their sources. They are cheap and they fail loud
 the moment a rename drifts.
 """
 
+import json
 import re
 import unittest
 from pathlib import Path
@@ -25,6 +26,7 @@ ALLOY = REPO_ROOT / "aws" / "k8s" / "20-alloy.yaml"
 GCP_STARTUP = REPO_ROOT / "gcp" / "scripts" / "startup.sh"
 ROOT_VARS = REPO_ROOT / "variables.tf"
 AWS_VARS = REPO_ROOT / "aws" / "variables.tf"
+PINS = REPO_ROOT / "pins.json"
 
 
 class RunbookTest(unittest.TestCase):
@@ -62,25 +64,29 @@ class RunbookTest(unittest.TestCase):
                               f"the runbook tells the operator to alert on {gauge}, "
                               f"which the guardrail never publishes")
 
-    def test_every_pin_named_is_a_real_variable_in_the_file_it_names(self):
-        root_block = self.text[self.text.index("## Routine maintenance"):]
-        root_block = root_block[: root_block.index("## Alerts")]
-        aws_pins = ("k3s_installer_sha256", "awscli_zip_sha256", "awscli_version")
-        for pin in re.findall(r"`([a-z0-9_]+_(?:sha256|version))`", root_block):
-            with self.subTest(pin=pin):
-                src = AWS_VARS if pin in aws_pins else ROOT_VARS
-                self.assertIn(f'variable "{pin}"', src.read_text(),
-                              f"{pin} is not declared in {src.name}")
-
-    def test_get_checksums_prints_every_pin_the_runbook_promises(self):
-        """The runbook says the script prints them all; make that true."""
-        printed = CHECKSUMS.read_text()
+    def test_the_pins_procedure_points_at_pins_json(self):
         block = self.text[self.text.index("## Routine maintenance"):]
         block = block[: block.index("## Alerts")]
-        for pin in re.findall(r"`([a-z0-9_]+_(?:sha256|version))`", block):
-            with self.subTest(pin=pin):
-                self.assertRegex(printed, rf'echo "{pin}\s*=',
-                                 f"get-checksums.sh does not print {pin}")
+        self.assertIn("`pins.json`", block, "the runbook does not say where pins live")
+        self.assertIn("get-checksums.sh --write", block, "the runbook does not say how to record new digests")
+        self.assertTrue(PINS.exists(), "the runbook points at pins.json, which does not exist")
+
+    def test_get_checksums_checks_every_digest_in_pins_json(self):
+        """The runbook says the script re-derives every digest; make that true."""
+        script = CHECKSUMS.read_text()
+        pins = json.loads(PINS.read_text())
+        for component, entry in pins.items():
+            if component in ("$comment", "images", "ubuntu", "vault"):
+                continue
+            digests = entry.get("sha256") or entry.get("installer_sha256")
+            keys = [None] if isinstance(digests, str) else list(digests)
+            field = "installer_sha256" if "installer_sha256" in entry else "sha256"
+            for key in keys:
+                path = f".{component}.{field}" + (f'["{key}"]' if key else "")
+                with self.subTest(pin=path):
+                    self.assertIn(path, script, f"get-checksums.sh never checks {path}")
+        self.assertIn(".images | keys[]", script, "get-checksums.sh does not check the image digests")
+        self.assertIn("apt.releases.hashicorp.com", script, "get-checksums.sh does not check the Vault apt version")
 
     def test_the_ops_unit_allowlist_matches_the_wrapper(self):
         m = re.search(r'ALLOWED="([^"]+)"', TPL.read_text())

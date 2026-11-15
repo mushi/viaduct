@@ -227,7 +227,7 @@ resource "google_compute_instance" "controlplane" {
 
   boot_disk {
     initialize_params {
-      image = var.boot_image
+      image = "ubuntu-os-cloud/ubuntu-${replace(local.pins.ubuntu.release, ".", "")}-lts-amd64"
       size  = 30
       type  = "pd-standard"
     }
@@ -261,11 +261,11 @@ resource "google_compute_instance" "controlplane" {
     region                 = var.region
     kms-keyring            = google_kms_key_ring.vault.name
     kms-cryptokey          = google_kms_crypto_key.vault_unseal.name
-    vault-version          = var.vault_version
+    vault-version          = "${local.pins.vault.version}-${local.pins.vault.apt_revision}"
     vault-addr-ip          = google_compute_address.controlplane.address
 
-    spire-version         = var.spire_version
-    spire-sha256          = var.spire_sha256
+    spire-version         = local.pins.spire.version
+    spire-sha256          = local.pins.spire.sha256["linux-amd64-musl"]
     spire-approle-role-id = var.spire_approle_role_id
     trust-domain          = var.trust_domain
 
@@ -277,11 +277,13 @@ resource "google_compute_instance" "controlplane" {
     snapshot-bucket          = google_storage_bucket.vault_snapshots.name
 
     # Control-plane log shipper (Grafana Alloy → Loki). Empty sha disables it.
-    alloy-version = var.alloy_version
-    alloy-sha256  = var.alloy_amd64_sha256
+    alloy-version = local.pins.alloy.version
+    alloy-sha256  = local.pins.alloy.sha256["alloy-linux-amd64.zip"]
 
     # Operator's one-time Vault bootstrap helper, delivered to /usr/local/bin by
     # startup.sh. Kept a standalone file so it is reviewable and lintable.
     bootstrap-vault-script = file("${path.module}/scripts/bootstrap-vault.sh")
+    # The OS baseline shared by every node's boot (see scripts/lib/os-baseline.sh).
+    os-baseline-lib = file("${path.module}/../scripts/lib/os-baseline.sh")
   }
 }

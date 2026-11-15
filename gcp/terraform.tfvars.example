@@ -5,11 +5,6 @@
 project_id           = "your-gcp-project-id"
 ssh_public_key       = "ssh-ed25519 AAAA... your-key-here"   # key content, not a path
 snapshot_bucket_name = "your-unique-vault-snapshot-bucket"   # globally unique
-vault_version        = "2.2.2-1"                             # verify: apt-cache madison vault
-
-# SPIRE server (linux-amd64-musl tarball)
-spire_version = "1.16.0"
-spire_sha256  = "<sha256 of spire-1.16.0-linux-amd64-musl.tar.gz>"
 
 # Vault AppRole role_ids (non-secret): generate each with `uuidgen`. bootstrap-vault.sh
 # sets them on the AppRoles, so there is no read-back into tfvars.
@@ -25,7 +20,6 @@ aws_certrole_approle_role_id = "generate-with-uuidgen" # aws-vault-agent cert-ro
 # zone                      = "us-central1-a"
 # instance_name             = "viaduct-controlplane"
 # machine_type              = "e2-micro"              # free-tier eligible (compute only)
-# boot_image                = "ubuntu-os-cloud/ubuntu-2404-lts-amd64"
 # allow_stopping_for_update = false                   # true permits stop/start on in-place changes
 # ssh_user                  = "viaduct"
 # ssh_private_key_path      = "~/.ssh/viaduct_lab"    # readiness check over IAP; never uploaded

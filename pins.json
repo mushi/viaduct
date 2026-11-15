@@ -1,0 +1,93 @@
+{
+  "$comment": "Every pinned version and digest the nodes download or boot. Single source for all Terraform roots and the AWS manifests; refresh with scripts/get-checksums.sh --write, then review the diff.",
+  "ubuntu": {
+    "release": "26.04",
+    "codename": "resolute"
+  },
+  "conduit": {
+    "version": "release-cli-2.1.0",
+    "sha256": {
+      "linux-amd64": "c7807eab4228ce52baad1f5b8be76c95e89448e2575bed51410c433bec7eb7ca",
+      "linux-arm64": "41d33d3a7c6288a4ae62c17f01d0667034d8757c26259e338a22544701528227"
+    }
+  },
+  "xray": {
+    "version": "v26.11.9",
+    "sha256": {
+      "Xray-linux-64.zip": "b651f7e1d9966ee2c1b1ee1bf8b52c72771824d3065dce96bbc8bcc19ed95f82"
+    }
+  },
+  "xray_exporter": {
+    "version": "v0.6.9",
+    "sha256": {
+      "linux-amd64": "68abdbc22edd94275da3af4606a0d6d920ca4ea90e32e1dea24081c38745a52a"
+    }
+  },
+  "alloy": {
+    "version": "v1.21.3",
+    "sha256": {
+      "alloy-linux-amd64.zip": "50d23af2d0f98c00beac6ce9a365693e60f87fb76b6cad6fe1d161e80588af6d"
+    }
+  },
+  "spire": {
+    "version": "1.16.0",
+    "sha256": {
+      "linux-amd64-musl": "7bcf5e167151a1fc58293768462b44e155ba8784214582aefa6adf18c633d1d5",
+      "linux-arm64-musl": "ba2804905a27ca72b0478ae790b580ea26233abafac7e480bbaf54152d5c2c5b"
+    }
+  },
+  "vault": {
+    "version": "2.2.2",
+    "apt_revision": "1"
+  },
+  "k3s": {
+    "version": "v1.37.2+k3s1",
+    "installer_sha256": "c2a2643dd7c259121a876d16538844c60928de3d38ae98f22f7b95a7ffcfab9d"
+  },
+  "awscli": {
+    "version": "2.40.1",
+    "sha256": {
+      "linux-aarch64.zip": "ce999da382eac247be6bd000af1ee16f23a2d25e5906e7fd9a83e54c1ecf37c1"
+    }
+  },
+  "geoip": {
+    "version": "202611080027",
+    "sha256": "eedb24b3b9fcba27e06b92c0428dab90d9496083091ae4cf39e11387fd99d0e2"
+  },
+  "geosite": {
+    "version": "20261110034535",
+    "sha256": "6cc4decf520dbfd96e1e3750661976eb31d2a5381090b8768cb2ab1528201fcf"
+  },
+  "images": {
+    "alpine": {
+      "name": "alpine",
+      "tag": "3.24.4",
+      "digest": "sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf"
+    },
+    "spiffe_csi_driver": {
+      "name": "ghcr.io/spiffe/spiffe-csi-driver",
+      "tag": "0.3.0",
+      "digest": "sha256:53bfb07bdde667f7f20f0d46cadca17043064c48d7603902fd090f03f38a40a1"
+    },
+    "spire_agent": {
+      "name": "ghcr.io/spiffe/spire-agent",
+      "tag": "1.16.0",
+      "digest": "sha256:ab3a8ce70435374cc5d84c81eabf0278dc046ddbc0a736d59694ba9e5975b1b6"
+    },
+    "alloy": {
+      "name": "grafana/alloy",
+      "tag": "v1.21.3",
+      "digest": "sha256:8ab871206bd2d8f89277f53abffee5f452a293980788d52f85fa183a87a505a4"
+    },
+    "vault": {
+      "name": "hashicorp/vault",
+      "tag": "2.2.2",
+      "digest": "sha256:dfa48c2fa2b0099ccb47681ec5c4804bf5aec9d6879ecfee07ad4b92a5427ad6"
+    },
+    "node_driver_registrar": {
+      "name": "registry.k8s.io/sig-storage/csi-node-driver-registrar",
+      "tag": "v2.18.0",
+      "digest": "sha256:b7fefd08651f00ac4df1a196ed4c621c2451fbb899297fe9fad9e36c667af0c0"
+    }
+  }
+}

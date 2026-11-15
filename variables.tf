@@ -38,12 +38,6 @@ variable "location" {
 
 # ── Conduit ───────────────────────────────────────────────────────────────────
 
-variable "conduit_version" {
-  description = "Conduit CLI release tag. Check https://github.com/Psiphon-Inc/conduit/releases for the latest."
-  type        = string
-  default     = "release-cli-2.1.0"
-}
-
 variable "conduit_bandwidth" {
   description = "Per-peer bandwidth cap in Mbps (--bandwidth flag). 40 Mbps leaves headroom for many concurrent peers on a CX23."
   type        = number
@@ -63,12 +57,6 @@ variable "conduit_cpu_quota" {
 }
 
 # ── Xray ─────────────────────────────────────────────────────────────────────
-
-variable "xray_version" {
-  description = "Xray-core release tag. Check https://github.com/XTLS/Xray-core/releases for the latest."
-  type        = string
-  default     = "v26.11.9"
-}
 
 variable "vless_sni" {
   description = "Domain that Reality impersonates (SNI). Must support TLS 1.3. microsoft.com is a widely-recommended default."
@@ -97,24 +85,7 @@ variable "vless_users" {
   }
 }
 
-variable "xray_exporter_version" {
-  description = "xray-exporter release tag (compassvpn fork). Check https://github.com/compassvpn/xray-exporter/releases."
-  type        = string
-  default     = "v0.6.9"
-}
-
-variable "xray_exporter_sha256" {
-  description = "SHA-256 of xray-exporter-linux-amd64 for the pinned xray_exporter_version. This release publishes no checksums file, so it is pinned here. Run scripts/get-checksums.sh to obtain."
-  type        = string
-}
-
 # ── Grafana / Alloy ───────────────────────────────────────────────────────────
-
-variable "alloy_version" {
-  description = "Grafana Alloy release tag. Check https://github.com/grafana/alloy/releases for the latest."
-  type        = string
-  default     = "v1.21.3"
-}
 
 # Grafana Cloud + Cloudflare secrets are NOT Terraform variables: the Hetzner node
 # fetches them from GCP Vault (kv/hetzner/grafana, kv/hetzner/cloudflare) at boot via its
@@ -132,21 +103,6 @@ variable "alloy_version" {
 # own signed digest files (.dgst / SHA256SUMS). It does NOT catch a release that was
 # already malicious when pinned — that needs upstream provenance (SLSA / cosign).
 
-variable "conduit_sha256" {
-  description = "SHA-256 of conduit-linux-amd64 for the pinned conduit_version. Run scripts/get-checksums.sh to obtain."
-  type        = string
-}
-
-variable "xray_zip_sha256" {
-  description = "SHA-256 of Xray-linux-64.zip for the pinned xray_version. Run scripts/get-checksums.sh to obtain."
-  type        = string
-}
-
-variable "alloy_zip_sha256" {
-  description = "SHA-256 of alloy-linux-amd64.zip for the pinned alloy_version. Run scripts/get-checksums.sh to obtain."
-  type        = string
-}
-
 # ── SPIRE agent (multi-cloud lab) ─────────────────────────────────────────────
 # This node runs a SPIRE agent that attests (via join_token) to the SPIRE
 # server on the GCP control plane (the `gcp/` root). Set enable_spire = true to
@@ -157,18 +113,6 @@ variable "enable_spire" {
   description = "Enable the SPIRE agent on this node. When true, the agent's server address and the provisioner's IAP target are sourced from the gcp/ root's remote state, so gcp/ must be applied first. When false, all SPIRE steps are skipped."
   type        = bool
   default     = false
-}
-
-variable "spire_agent_version" {
-  description = "SPIRE release version for the agent binary (e.g. 1.16.0)."
-  type        = string
-  default     = "1.16.0"
-}
-
-variable "spire_agent_sha256" {
-  description = "SHA-256 of spire-<version>-linux-amd64-musl.tar.gz for the pinned spire_agent_version."
-  type        = string
-  default     = ""
 }
 
 variable "gcp_ssh_key_path" {
@@ -217,26 +161,3 @@ variable "wg_hub_ip" {
 # Pinned by release tag AND digest. Both are needed: the previous code tracked
 # "latest", which no fixed digest can describe.
 
-variable "geoip_version" {
-  description = "Pinned v2fly/geoip release tag providing geoip.dat."
-  type        = string
-  default     = "202611080027"
-}
-
-variable "geoip_sha256" {
-  description = "SHA-256 of geoip.dat from the pinned v2fly/geoip release."
-  type        = string
-  default     = "eedb24b3b9fcba27e06b92c0428dab90d9496083091ae4cf39e11387fd99d0e2"
-}
-
-variable "geosite_version" {
-  description = "Pinned v2fly/domain-list-community release tag providing dlc.dat (installed as geosite.dat)."
-  type        = string
-  default     = "20261110034535"
-}
-
-variable "geosite_sha256" {
-  description = "SHA-256 of dlc.dat from the pinned v2fly/domain-list-community release."
-  type        = string
-  default     = "6cc4decf520dbfd96e1e3750661976eb31d2a5381090b8768cb2ab1528201fcf"
-}

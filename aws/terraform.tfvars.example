@@ -5,10 +5,6 @@
 region               = "ap-south-1"    # t4g free-trial eligible (Mumbai)
 gcp_control_plane_ip = "203.0.113.10"  # GCP node's PUBLIC IP (the WireGuard endpoint this spoke dials). Deploy gcp/ first.
 
-# SPIRE server: arm64 tarball for Graviton (NOTE: arm64, not amd64)
-spire_version = "1.16.0"
-spire_sha256  = "<sha256 of spire-1.16.0-linux-arm64-musl.tar.gz>"
-
 # ── Optional (defaults shown; uncomment to override) ──────────────────────────
 # gcp_project          = ""                     # empty uses gcloud's active project
 # gcp_ssh_user         = "viaduct"              # federation-sync IAP tunnel to GCP
@@ -20,7 +16,6 @@ spire_sha256  = "<sha256 of spire-1.16.0-linux-arm64-musl.tar.gz>"
 # vpc_cidr             = "10.20.0.0/24"
 # root_volume_gb       = 30
 # bundle_endpoint_port = 8443                   # SPIRE federation bundle endpoint (mesh-only)
-# k3s_version          = "v1.37.2+k3s1"
 # wg_port              = 51820                  # hub UDP port (must match gcp/ wg_port)
 # wg_mesh_ip           = "10.99.0.3"            # this spoke's mesh address
 # wg_hub_ip            = "10.99.0.1"            # GCP hub's mesh address (control-plane target)

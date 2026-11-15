@@ -32,25 +32,14 @@ vless_domain = "example.com"
 # ── Optional overrides ────────────────────────────────────────────────────────
 
 # location            = "nbg1"              # nbg1 fsn1 hel1 ash sin
-# conduit_version     = "release-cli-2.1.0"
 # conduit_bandwidth   = 40
 # conduit_max_clients = 100
 # conduit_cpu_quota   = "60%"
-# xray_version        = "v26.11.9"
-# xray_exporter_version = "v0.2.0"
 # vless_sni           = "microsoft.com"      # SNI the Reality inbound impersonates
-# alloy_version       = "v1.21.3"
 # ops_ssh_key_path    = "~/.ssh/viaduct_ops" # local ops private key, for ssh -i to ops@
 
-# ── Binary checksums (required) ───────────────────────────────────────────────
-# Run: ./scripts/get-checksums.sh
-# Paste the output here. Must be updated whenever any *_version changes above.
-# The script cross-checks against each project's upstream digest file where
-# available (Xray .dgst, Grafana SHA256SUMS) before printing values.
-conduit_sha256       = ""   # obtain via scripts/get-checksums.sh
-xray_zip_sha256      = ""   # obtain via scripts/get-checksums.sh
-alloy_zip_sha256     = ""   # obtain via scripts/get-checksums.sh
-xray_exporter_sha256 = ""   # obtain via scripts/get-checksums.sh (no upstream checksums file, pinned here)
+# Versions and checksums are not set here: every root reads them from the committed
+# pins.json (see docs/RUNBOOK.md, Routine maintenance).
 
 # ── SPIRE agent (multi-cloud lab, optional) ──────────────────────────────────
 # This node attests (join_token) to the SPIRE server in the gcp/ root. Deploy
@@ -60,8 +49,6 @@ xray_exporter_sha256 = ""   # obtain via scripts/get-checksums.sh (no upstream c
 # The provisioner mints the join token over IAP, so it also needs gcloud
 # installed and authed with iap.tunnelResourceAccessor.
 # enable_spire         = false
-# spire_agent_version  = "1.16.0"
-# spire_agent_sha256   = "e1b58f9f52f601dc35c3b56bad4c810dfb7faf50c8531bcecdb4f64ae3cc007a"
 # gcp_project          = ""                    # empty uses gcloud's active project
 # gcp_ssh_key_path     = "~/.ssh/viaduct_lab"
 # gcp_ssh_user         = "viaduct"

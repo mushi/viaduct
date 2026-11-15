@@ -33,28 +33,15 @@ NODE_NAME="$(hostname)"
 log "starting Viaduct AWS node provisioning (region=$REGION, trust_domain=$TRUST_DOMAIN)"
 
 # ─── 1. base packages ─────────────────────────────────────────────────────────
-# Ubuntu 26.04 defaults to the Rust coreutils (uutils); this script was written against
-# GNU behaviour (sha256sum --check --strict on every pin), so switch back and fail the boot
-# if the switch did not take. The upgrade brings in kernel and ca-certificates fixes; a
-# kernel fix only takes effect after a reboot, which unattended-upgrades performs in the
-# quiet hours when one is needed. Every apt call waits for the dpkg lock held at boot.
-export DEBIAN_FRONTEND=noninteractive
-APT="apt-get -o DPkg::Lock::Timeout=600 -y -qq"
-$APT update
-# apt counts coreutils-from-uutils as essential, so the swap names the removal and allows
-# it; coreutils stays provided because the GNU variant lands in the same transaction.
-$APT --allow-remove-essential install coreutils-from-gnu coreutils-from-uutils- >/dev/null
-ls --version | head -n 1 | grep -q 'GNU coreutils' \
-  || { log "FATAL: GNU coreutils not active (coreutils-from-gnu)"; exit 1; }
-# --with-new-pkgs: a kernel fix arrives as a new package (linux-image-<version>), which
-# plain `upgrade` holds back; this installs new dependencies but never removes anything.
-$APT upgrade --with-new-pkgs >/dev/null
-$APT install curl unzip ca-certificates openssl >/dev/null
-cat > /etc/apt/apt.conf.d/52viaduct-auto-reboot <<'APTREBOOT'
-Unattended-Upgrade::Automatic-Reboot "true";
-Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
-Unattended-Upgrade::Automatic-Reboot-Time "03:30";
-APTREBOOT
+# The OS baseline shared by every node's boot (scripts/lib/os-baseline.sh): GNU coreutils,
+# security and kernel updates, reboot policy.
+install -d -m0755 /opt/viaduct/lib
+install -m0644 /dev/stdin /opt/viaduct/lib/os-baseline.sh <<'OSBASELINE'
+${os_baseline_lib}
+OSBASELINE
+. /opt/viaduct/lib/os-baseline.sh
+osb_baseline >/dev/null || { log "FATAL: OS baseline failed (see os-baseline.sh)"; exit 1; }
+osb_apt install curl unzip ca-certificates openssl >/dev/null
 
 # Persist journald so the Alloy pod (which mounts /var/log/journal read-only) can ship
 # spire-server / k3s / sshd records to Loki. Volatile /run/log/journal would vanish on
@@ -370,14 +357,7 @@ systemctl start --no-block viaduct-crosscloud.service
 # the persisted conf + key. A rebuild regenerates the key, and the provisioner
 # re-registers the new public key with the hub.
 apt-get install -y -qq wireguard-tools >/dev/null
-# Ubuntu 26.04's AppArmor profile for `wg` denies listing /run/wireguard/ (where `wg show
-# interfaces` looks for userspace sockets), so wg-quick down leaves wg0 up and every later
-# restart fails on "already exists". Allow that one directory listing.
-if [ -f /etc/apparmor.d/wg ]; then
-  install -d -m 0755 /etc/apparmor.d/local
-  printf '%s\n' '/run/wireguard/ r,' > /etc/apparmor.d/local/wg
-  apparmor_parser -r /etc/apparmor.d/wg
-fi
+osb_wg_apparmor
 install -d -m 0700 /etc/wireguard
 if [ ! -f /etc/wireguard/wg0.key ]; then
   ( umask 077; wg genkey > /etc/wireguard/wg0.key )

@@ -11,8 +11,8 @@ the network and the node:
             integrity and nothing else: whatever serves a modified .dat serves a
             matching sum.
 
-Per the operator's decision all three are pinned as Terraform variables, matching
-the pattern already used for conduit, xray, alloy and spire.
+Per the operator's decision all three are pinned, in pins.json, with every other
+downloaded artifact.
 
 The verification idiom is extracted from the templates and executed against a stub
 so what is asserted is that a tampered artifact actually stops the boot — not that
@@ -20,6 +20,7 @@ a `sha256sum` line is present.
 """
 
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -30,8 +31,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CLOUD_INIT = REPO_ROOT / "cloud-init.yaml.tpl"
 AWS_STARTUP = REPO_ROOT / "aws" / "scripts" / "startup.sh.tpl"
-VARIABLES = REPO_ROOT / "variables.tf"
-AWS_VARIABLES = REPO_ROOT / "aws" / "variables.tf"
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -44,45 +43,86 @@ def uncommented(text: str) -> str:
     return "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
 
 
-def tf_default(path: Path, name: str) -> str:
-    """The `default = "..."` of a variable block in a .tf file."""
-    body = path.read_text()
-    block = body[body.index(f'variable "{name}" {{'):]
-    block = block[: block.index("\n}")]
-    return re.search(r'default\s*=\s*"([^"]*)"', block).group(1)
+PINS = json.loads((REPO_ROOT / "pins.json").read_text())
+
+# Template variable -> (root main.tf, pins.json path). The boot templates name a pin by
+# these variables; Terraform fills each from pins.json, and the wiring test below holds
+# main.tf to exactly these paths, so a value read here is the value a node verifies.
+TEMPLATE_PINS = {
+    "geoip_version":        ("main.tf",     ("geoip", "version")),
+    "geoip_sha256":         ("main.tf",     ("geoip", "sha256")),
+    "geosite_version":      ("main.tf",     ("geosite", "version")),
+    "geosite_sha256":       ("main.tf",     ("geosite", "sha256")),
+    "k3s_version":          ("aws/main.tf", ("k3s", "version")),
+    "k3s_installer_sha256": ("aws/main.tf", ("k3s", "installer_sha256")),
+    "awscli_version":       ("aws/main.tf", ("awscli", "version")),
+    "awscli_zip_sha256":    ("aws/main.tf", ("awscli", "sha256", "linux-aarch64.zip")),
+}
+
+
+def pinned(name: str) -> str:
+    """The pins.json value a template variable is rendered with."""
+    node = PINS
+    for key in TEMPLATE_PINS[name][1]:
+        node = node[key]
+    return node
+
+
+def tf_expr(path) -> str:
+    """The Terraform expression that reads `path` from local.pins."""
+    head, *rest = path
+    expr = f"local.pins.{head}"
+    for key in rest:
+        expr += f".{key}" if re.fullmatch(r"[a-z_][a-z0-9_]*", key) else f'["{key}"]'
+    return expr
 
 
 class PinnedDigestsAreRealTest(unittest.TestCase):
     """A pin that is blank, or a placeholder, verifies nothing."""
 
-    CASES = [
-        (VARIABLES, "geoip_sha256"),
-        (VARIABLES, "geosite_sha256"),
-        (AWS_VARIABLES, "k3s_installer_sha256"),
-        (AWS_VARIABLES, "awscli_zip_sha256"),
-    ]
+    def digests(self):
+        """Every sha256 in pins.json, by path."""
+        out = {}
+        def walk(node, path):
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    walk(v, path + [k])
+            elif isinstance(node, str) and ("sha256" in path or path[-1] == "installer_sha256"
+                                            or path[-1] == "digest"):
+                out[".".join(path)] = node.removeprefix("sha256:")
+        walk(PINS, [])
+        return out
 
     def test_each_pin_is_a_sha256(self):
-        for path, name in self.CASES:
-            with self.subTest(variable=name):
-                value = tf_default(path, name)
-                self.assertRegex(
-                    value, SHA256_RE,
-                    f"{name} is {value!r}, which sha256sum --check cannot use")
+        digests = self.digests()
+        self.assertGreaterEqual(len(digests), 17, "anchor: pins.json digests not found")
+        for path, value in digests.items():
+            with self.subTest(pin=path):
+                self.assertRegex(value, SHA256_RE, f"{path} is {value!r}, which sha256sum --check cannot use")
 
     def test_pins_are_distinct(self):
-        values = [tf_default(p, n) for p, n in self.CASES]
+        values = list(self.digests().values())
         self.assertEqual(len(set(values)), len(values),
                          "two artifacts share a digest — one was copy-pasted")
 
     def test_version_pins_accompany_the_digests(self):
-        """A digest against a `latest` URL is unsatisfiable; both must be pinned."""
-        for path, name in ((VARIABLES, "geoip_version"),
-                           (VARIABLES, "geosite_version"),
-                           (AWS_VARIABLES, "awscli_version")):
+        """A digest against a `latest` URL is unsatisfiable; every component needs a version."""
+        for component, entry in PINS.items():
+            if component in ("$comment", "images"):
+                continue
+            with self.subTest(component=component):
+                self.assertTrue(entry.get("version") or entry.get("release"), f"{component} has no pinned version")
+        for name, image in PINS["images"].items():
+            with self.subTest(image=name):
+                self.assertTrue(image["tag"] and image["digest"].startswith("sha256:"), f"image {name} is not pinned")
+
+    def test_terraform_wires_each_template_pin_from_pins_json(self):
+        """What these tests read from pins.json must be what Terraform renders into the boot."""
+        for name, (tf, path) in TEMPLATE_PINS.items():
             with self.subTest(variable=name):
-                self.assertNotEqual(tf_default(path, name), "",
-                                    f"{name} has no pinned value")
+                self.assertRegex((REPO_ROOT / tf).read_text(),
+                                 rf"(?m)^\s*{name}\s*=\s*{re.escape(tf_expr(path))}\s*$",
+                                 f"{tf} does not render {name} from pins.json {path}")
 
 
 class NoUnverifiedFetchTest(unittest.TestCase):
@@ -134,7 +174,7 @@ class DigestCheckBehaviourTest(unittest.TestCase):
     """Execute the extracted verification idiom against good and tampered bytes.
 
     The fragment is rendered the way templatefile() renders it — escapes undone and
-    every ${var} replaced by its variables.tf default — so what runs here is what the
+    every ${var} replaced by its pins.json value — so what runs here is what the
     node runs. `overrides` lets a test substitute a different pin, which is how the
     accept path is exercised without shipping a 100MB fixture: if the check were a
     no-op, changing the pin would not change the outcome.
@@ -154,7 +194,7 @@ class DigestCheckBehaviourTest(unittest.TestCase):
 
         def resolve(m):
             name = m.group(1)
-            return values.get(name) or tf_default(VARIABLES, name)
+            return values.get(name) or pinned(name)
 
         return re.sub(r"\$\{([a-z0-9_]+)\}", resolve, fragment)
 
@@ -189,11 +229,11 @@ class DigestCheckBehaviourTest(unittest.TestCase):
         return p
 
     def test_the_fragment_carries_the_recorded_pins(self):
-        """The rendered script must verify against variables.tf, not some other value."""
+        """The rendered script must verify against pins.json, not some other value."""
         fragment = self.geo_fragment()
         for name in ("geoip_sha256", "geosite_sha256"):
             with self.subTest(variable=name):
-                self.assertIn(tf_default(VARIABLES, name), fragment,
+                self.assertIn(pinned(name), fragment,
                               f"the rendered fragment does not carry {name}")
 
     def test_an_artifact_matching_the_pin_installs(self):
@@ -246,7 +286,7 @@ class RootInstallBehaviourTest(unittest.TestCase):
         block = body[start:end]
         values = dict(overrides or {})
         return re.sub(r"\$\{([a-z0-9_]+)\}",
-                      lambda m: values.get(m.group(1)) or tf_default(AWS_VARIABLES, m.group(1)),
+                      lambda m: values.get(m.group(1)) or pinned(m.group(1)),
                       block)
 
     def run_k3s(self, served: bytes, overrides=None):

@@ -21,7 +21,7 @@ data "aws_ami" "ubuntu" {
 
   filter {
     name   = "name"
-    values = ["ubuntu/images/hvm-ssd*/ubuntu-resolute-26.04-arm64-server-*"]
+    values = ["ubuntu/images/hvm-ssd*/ubuntu-${local.pins.ubuntu.codename}-${local.pins.ubuntu.release}-arm64-server-*"]
   }
   filter {
     name   = "architecture"
@@ -268,22 +268,23 @@ resource "aws_instance" "spire" {
     wg_hub_ip            = var.wg_hub_ip
     trust_domain         = var.trust_domain
     gcp_trust_domain     = var.gcp_trust_domain
-    spire_version        = var.spire_version
-    spire_sha256         = var.spire_sha256
-    k3s_version          = var.k3s_version
-    k3s_installer_sha256 = var.k3s_installer_sha256
-    awscli_version       = var.awscli_version
-    awscli_zip_sha256    = var.awscli_zip_sha256
+    spire_version        = local.pins.spire.version
+    spire_sha256         = local.pins.spire.sha256["linux-arm64-musl"]
+    k3s_version          = local.pins.k3s.version
+    k3s_installer_sha256 = local.pins.k3s.installer_sha256
+    awscli_version       = local.pins.awscli.version
+    awscli_zip_sha256    = local.pins.awscli.sha256["linux-aarch64.zip"]
     k8s_rbac             = file("${path.module}/k8s/00-namespaces-rbac.yaml")
-    k8s_csi              = file("${path.module}/k8s/01-spiffe-csi-driver.yaml")
-    k8s_conduit          = file("${path.module}/k8s/10-conduit.yaml")
-    k8s_alloy            = file("${path.module}/k8s/20-alloy.yaml")
+    k8s_csi              = templatefile("${path.module}/k8s/01-spiffe-csi-driver.yaml", local.k8s_pins)
+    k8s_conduit          = templatefile("${path.module}/k8s/10-conduit.yaml", local.k8s_pins)
+    k8s_alloy            = templatefile("${path.module}/k8s/20-alloy.yaml", local.k8s_pins)
     guardrail_script     = file("${path.module}/scripts/egress-guardrail.sh")
     crosscloud_script    = file("${path.module}/scripts/crosscloud-bootstrap.sh")
     # Shared mesh-trust helpers live at the repo root so both provisioners use one
     # copy; crosscloud-bootstrap.sh runs from /opt/viaduct on the node, so the
     # library is installed next to it by startup.sh.tpl.
-    mesh_trust_lib = file("${path.module}/../scripts/lib/mesh-trust.sh")
+    mesh_trust_lib  = file("${path.module}/../scripts/lib/mesh-trust.sh")
+    os_baseline_lib = file("${path.module}/../scripts/lib/os-baseline.sh")
   }), "/(?m)^[[:blank:]]*#([^!].*)?$/", ""))
   # IMDSv2 required (token-based) — aws_iid fetches the identity document here.
   metadata_options {

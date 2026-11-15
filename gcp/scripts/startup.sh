@@ -41,30 +41,12 @@ fi
 unset BVS
 
 # ── 0. OS baseline: GNU coreutils, security updates, reboot policy ───────────
-# Ubuntu 26.04 defaults to the Rust coreutils (uutils); this script was written against
-# GNU behaviour (sha256sum checks on every pin, stat, base64), so switch back and fail
-# the boot if the switch did not take. The upgrade brings in kernel and ca-certificates
-# fixes; Vault is apt-held, so it never moves here. A kernel fix only takes effect after
-# a reboot, which unattended-upgrades now performs in the quiet hours when one is needed.
-# Every apt call waits for the dpkg lock: apt-daily and unattended-upgrades hold it at boot.
-export DEBIAN_FRONTEND=noninteractive
-APT="apt-get -o DPkg::Lock::Timeout=600 -y -q"
-$APT update
-# apt counts coreutils-from-uutils as essential (coreutils pre-depends on it or on the GNU
-# variant), so the swap must name the removal and allow it; coreutils stays provided
-# throughout because the GNU variant is installed in the same transaction.
-dpkg-query -W -f='${Status}' coreutils-from-gnu 2>/dev/null | grep -q 'install ok installed' \
-  || $APT --allow-remove-essential install coreutils-from-gnu coreutils-from-uutils-
-ls --version | head -n 1 | grep -q 'GNU coreutils' \
-  || { echo "FATAL - GNU coreutils not active (coreutils-from-gnu)" >&2; exit 1; }
-# --with-new-pkgs: a kernel fix arrives as a new package (linux-image-<version>), which
-# plain `upgrade` holds back; this installs new dependencies but never removes anything.
-$APT upgrade --with-new-pkgs
-cat > /etc/apt/apt.conf.d/52viaduct-auto-reboot <<'APTREBOOT'
-Unattended-Upgrade::Automatic-Reboot "true";
-Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
-Unattended-Upgrade::Automatic-Reboot-Time "03:30";
-APTREBOOT
+# Shared by all three nodes (scripts/lib/os-baseline.sh), shipped here as metadata. The
+# upgrade brings in kernel and ca-certificates fixes; Vault is apt-held, so it never moves.
+install -d -m 0755 /usr/local/lib/viaduct
+md instance/attributes/os-baseline-lib > /usr/local/lib/viaduct/os-baseline.sh
+. /usr/local/lib/viaduct/os-baseline.sh
+osb_baseline
 
 # ── 1. No swap (deliberate) ──────────────────────────────────────────────────
 # With mlock disabled (see vault.hcl), swap would be a path for in-memory
@@ -786,17 +768,9 @@ DROPIN
   echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-wireguard-forward.conf
   sysctl -p /etc/sysctl.d/99-wireguard-forward.conf
 
-  # Ubuntu 26.04's AppArmor profile for `wg` only lets it read under /etc/wireguard. That
-  # denies the PostUp `wg set ... private-key` above on the tmpfs key (EACCES), and denies
-  # listing /run/wireguard/, where `wg show interfaces` looks for userspace sockets: wg-quick
-  # down then calls wg0 "not a WireGuard interface" and leaves it up, so every restart fails
-  # on "wg0 already exists". Allow exactly the directory listing and the key, read-only,
-  # through the profile's local include.
-  if [ -f /etc/apparmor.d/wg ]; then
-    install -d -m 0755 /etc/apparmor.d/local
-    printf '%s\n' "$(dirname "$WG_RUN_KEY")/ r," "${WG_RUN_KEY} r," > /etc/apparmor.d/local/wg
-    apparmor_parser -r /etc/apparmor.d/wg
-  fi
+  # The hub keeps its key in tmpfs, outside the /etc/wireguard the `wg` AppArmor profile
+  # allows (os-baseline.sh explains the profile).
+  osb_wg_apparmor "${WG_RUN_KEY}"
 
   systemctl daemon-reload
   systemctl enable wg-quick@wg0

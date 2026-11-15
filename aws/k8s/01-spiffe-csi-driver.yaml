@@ -28,7 +28,7 @@ spec:
       serviceAccountName: spiffe-csi-driver
       containers:
         - name: spiffe-csi-driver
-          image: ghcr.io/spiffe/spiffe-csi-driver@sha256:53bfb07bdde667f7f20f0d46cadca17043064c48d7603902fd090f03f38a40a1 # 0.3.0
+          image: ${images.spiffe_csi_driver}
           imagePullPolicy: IfNotPresent
           args: [
             "-workload-api-socket-dir", "/spire-agent-socket",
@@ -63,7 +63,7 @@ spec:
         # This container runs the CSI Node Driver Registrar
         # required to register a CSI driver with the kubelet.
         - name: node-driver-registrar
-          image: registry.k8s.io/sig-storage/csi-node-driver-registrar@sha256:b7fefd08651f00ac4df1a196ed4c621c2451fbb899297fe9fad9e36c667af0c0 # v2.18.0
+          image: ${images.node_driver_registrar}
           imagePullPolicy: IfNotPresent
           args: [
             "-csi-address", "/spiffe-csi/csi.sock",

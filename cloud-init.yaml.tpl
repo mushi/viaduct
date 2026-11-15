@@ -10,7 +10,6 @@
 #   • Touch /var/lib/cloud-init-done to signal the provisioner it can proceed
 
 package_update: true
-package_upgrade: true
 packages:
   - curl
   - ca-certificates
@@ -585,16 +584,13 @@ write_files:
       APT::Periodic::Unattended-Upgrade "1";
       APT::Periodic::AutocleanInterval "7";
 
-  # A kernel fix only takes effect after a reboot, and nothing else reboots this node:
-  # CVE-2026-98432 sat installed-but-inactive for weeks. Reboot in the quiet hours when
-  # an update requires it, even with an ops session open.
-  - path: /etc/apt/apt.conf.d/52viaduct-auto-reboot
+  # The OS baseline shared by every node's boot (scripts/lib/os-baseline.sh), sourced by
+  # runcmd below: GNU coreutils, security and kernel updates, reboot policy, AppArmor.
+  - path: /usr/local/lib/viaduct/os-baseline.sh
     owner: root:root
     permissions: "0644"
-    content: |
-      Unattended-Upgrade::Automatic-Reboot "true";
-      Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
-      Unattended-Upgrade::Automatic-Reboot-Time "03:30";
+    encoding: b64
+    content: ${base64encode(os_baseline_lib)}
 
   # ── install-xray-exporter.sh ──────────────────────────────────────────────
   # Runs during cloud-init (runcmd). Needs bash for [[ ]] and glob comparisons,
@@ -1050,13 +1046,9 @@ write_files:
       ls -1 "$CLIENTS_DIR/"*.txt 2>/dev/null | while read -r f; do echo "  $f"; done || true
 
 runcmd:
-  # Ubuntu 26.04 defaults to the Rust coreutils (uutils); every script here was written
-  # against GNU behaviour (sha256sum --check --strict on each pin, stat -c, base64 -d), so
-  # switch back before anything else runs, and fail the boot if the switch did not take.
-  # apt counts coreutils-from-uutils as essential, so the swap names the removal and allows
-  # it (the packages module cannot); coreutils stays provided throughout the transaction.
-  - DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 -y -q --allow-remove-essential install coreutils-from-gnu coreutils-from-uutils-
-  - ls --version | head -n 1 | grep -q 'GNU coreutils' || { echo "FATAL - GNU coreutils not active (coreutils-from-gnu)" >&2; exit 1; }
+  # The OS baseline first, so GNU coreutils are in place before anything relies on them;
+  # a failure (FATAL on stderr) stops the boot here.
+  - . /usr/local/lib/viaduct/os-baseline.sh && osb_baseline || exit 1
   # ── System users ──────────────────────────────────────────────────────────
   - useradd --system --no-create-home --shell /usr/sbin/nologin conduit
   - useradd --system --no-create-home --shell /usr/sbin/nologin xray
@@ -1293,17 +1285,9 @@ runcmd:
   # the hub peer) and starts wg-quick; on a reboot the enabled unit reads the
   # persisted conf + key. A rebuild regenerates the key, and the provisioner
   # re-registers the new public key with the hub.
-  # Ubuntu 26.04's AppArmor profile for `wg` denies listing /run/wireguard/, where
-  # `wg show interfaces` looks for userspace sockets; wg-quick down then calls wg0 "not a
-  # WireGuard interface" and leaves it up, so every later restart fails on "already
-  # exists". Allow that one directory listing through the profile's local include.
   - |
     apt-get install -y wireguard-tools
-    if [ -f /etc/apparmor.d/wg ]; then
-      install -d -m 0755 /etc/apparmor.d/local
-      printf '%s\n' '/run/wireguard/ r,' > /etc/apparmor.d/local/wg
-      apparmor_parser -r /etc/apparmor.d/wg
-    fi
+    . /usr/local/lib/viaduct/os-baseline.sh && osb_wg_apparmor
     install -d -m 0700 /etc/wireguard
     if [ ! -f /etc/wireguard/wg0.key ]; then
       ( umask 077; wg genkey > /etc/wireguard/wg0.key )
