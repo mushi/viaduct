@@ -30,7 +30,7 @@ variable "machine_type" {
 variable "boot_image" {
   description = "Boot disk image (project/family shorthand)."
   type        = string
-  default     = "ubuntu-os-cloud/ubuntu-2404-lts-amd64"
+  default     = "ubuntu-os-cloud/ubuntu-2604-lts-amd64"
 }
 
 variable "allow_stopping_for_update" {
@@ -73,7 +73,7 @@ variable "vault_version" {
 }
 
 variable "spire_version" {
-  description = "SPIRE release version, e.g. \"1.15.1\" (downloads the linux-amd64-musl tarball; musl builds are static and run on Ubuntu)."
+  description = "SPIRE release version, e.g. \"1.16.0\" (downloads the linux-amd64-musl tarball; musl builds are static and run on Ubuntu)."
   type        = string
 }
 
@@ -121,7 +121,7 @@ variable "wg_ingress_cidrs" {
 variable "alloy_version" {
   description = "Grafana Alloy release tag for the control-plane log shipper (linux-amd64.zip). Match the data-plane alloy_version."
   type        = string
-  default     = "v1.8.3"
+  default     = "v1.21.3"
 }
 
 variable "alloy_amd64_sha256" {

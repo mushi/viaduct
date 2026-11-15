@@ -12,7 +12,7 @@ data "grafana_data_source" "prometheus" {
 
 locals {
   # The egress guardrail (aws/scripts/egress-guardrail.sh) publishes these gauges every
-  # 15 min through the node's Alloy. Throttling starts at 70% of the cap; the stop
+  # 15 min through the node's Alloy. Throttling starts at 70% of the cap; pausing Conduit
   # needs two consecutive readings over it. Each rule names what it means and what to do.
   aws_rules = [
     {
@@ -21,17 +21,25 @@ locals {
       threshold = 0
       for       = "10m"
       summary   = "No metrics from the AWS node for 30 min"
-      # Covers every way the node stops reporting: the guardrail's own stop at the cap,
-      # a crash, or Alloy failing. A guardrail stop has no other notice.
-      description = "Stopped, crashed, or Alloy not shipping. If MTD egress was near the cap, the guardrail stopped it: `{node=\"aws\", unit=\"egress-guardrail.service\"}` in Loki. It stays stopped until started by hand: RUNBOOK, Recovery, 'AWS node stopped by the egress guardrail'."
+      # The guardrail pauses Conduit at the cap and leaves the node up, so this is never
+      # the cap: the node is stopped, crashed, or its Alloy is not shipping.
+      description = "Stopped, crashed, or Alloy not shipping. The egress guardrail never stops the node (it pauses Conduit instead), so check the instance state and `journalctl -u k3s` / the alloy pod over SSM."
     },
     {
       name        = "AWS egress near cap"
       expr        = "max(aws_mtd_egress_bytes{node=\"aws\"}) / max(aws_egress_cap_bytes{node=\"aws\"})"
       threshold   = 0.9
       for         = "0s"
-      summary     = "AWS month-to-date egress above 90% of the auto-stop cap"
-      description = "The guardrail stops the instance on two consecutive readings over the cap. At the throttled rate that is typically a day or two away."
+      summary     = "AWS month-to-date egress above 90% of the cap"
+      description = "The guardrail pauses Conduit on two consecutive readings over the cap. At the normal rate that is typically a day or two away."
+    },
+    {
+      name        = "Conduit paused at egress cap"
+      expr        = "max(aws_conduit_paused{node=\"aws\"})"
+      threshold   = 0
+      for         = "0s"
+      summary     = "The egress guardrail has paused Conduit on the AWS node"
+      description = "Month-to-date egress passed the cap. The node, SPIRE and the mesh stay up; the guardrail resumes Conduit on its own once a new month's reading is under the cap. Nothing to do unless it is still paused after the 1st: RUNBOOK, Recovery, 'Conduit paused by the egress guardrail'."
     },
     {
       name        = "AWS egress throttled"
@@ -134,9 +142,12 @@ resource "grafana_rule_group" "viaduct" {
       condition = "C"
       for       = rule.value.for
       # An instant query that matches nothing is the healthy state for every rule here
-      # (absent_over_time included), so NoData must not page.
+      # (absent_over_time included), so NoData must not page. A query that cannot run
+      # (a datasource timeout) keeps the previous state: with Error, every rule sent its
+      # own DatasourceError and a firing alert was knocked out and re-fired on each
+      # timeout. Sustained evaluation failure is reported once, by the dead man's switch.
       no_data_state  = "OK"
-      exec_err_state = "Error"
+      exec_err_state = "KeepLast"
       labels         = each.value.labels
       annotations = merge(
         {

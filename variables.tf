@@ -41,7 +41,7 @@ variable "location" {
 variable "conduit_version" {
   description = "Conduit CLI release tag. Check https://github.com/Psiphon-Inc/conduit/releases for the latest."
   type        = string
-  default     = "release-cli-2.0.0"
+  default     = "release-cli-2.1.0"
 }
 
 variable "conduit_bandwidth" {
@@ -67,7 +67,7 @@ variable "conduit_cpu_quota" {
 variable "xray_version" {
   description = "Xray-core release tag. Check https://github.com/XTLS/Xray-core/releases for the latest."
   type        = string
-  default     = "v26.4.25"
+  default     = "v26.11.9"
 }
 
 variable "vless_sni" {
@@ -100,7 +100,7 @@ variable "vless_users" {
 variable "xray_exporter_version" {
   description = "xray-exporter release tag (compassvpn fork). Check https://github.com/compassvpn/xray-exporter/releases."
   type        = string
-  default     = "v0.2.0"
+  default     = "v0.6.9"
 }
 
 variable "xray_exporter_sha256" {
@@ -113,7 +113,7 @@ variable "xray_exporter_sha256" {
 variable "alloy_version" {
   description = "Grafana Alloy release tag. Check https://github.com/grafana/alloy/releases for the latest."
   type        = string
-  default     = "v1.8.3"
+  default     = "v1.21.3"
 }
 
 # Grafana Cloud + Cloudflare secrets are NOT Terraform variables: the Hetzner node
@@ -160,9 +160,9 @@ variable "enable_spire" {
 }
 
 variable "spire_agent_version" {
-  description = "SPIRE release version for the agent binary (e.g. 1.15.1)."
+  description = "SPIRE release version for the agent binary (e.g. 1.16.0)."
   type        = string
-  default     = "1.15.1"
+  default     = "1.16.0"
 }
 
 variable "spire_agent_sha256" {
@@ -220,23 +220,23 @@ variable "wg_hub_ip" {
 variable "geoip_version" {
   description = "Pinned v2fly/geoip release tag providing geoip.dat."
   type        = string
-  default     = "202608050239"
+  default     = "202611080027"
 }
 
 variable "geoip_sha256" {
   description = "SHA-256 of geoip.dat from the pinned v2fly/geoip release."
   type        = string
-  default     = "c67bd077eb102cec74fab759b73d17f99275f56af10a87c14d9fd983508f5ce1"
+  default     = "eedb24b3b9fcba27e06b92c0428dab90d9496083091ae4cf39e11387fd99d0e2"
 }
 
 variable "geosite_version" {
   description = "Pinned v2fly/domain-list-community release tag providing dlc.dat (installed as geosite.dat)."
   type        = string
-  default     = "20260807145230"
+  default     = "20261110034535"
 }
 
 variable "geosite_sha256" {
   description = "SHA-256 of dlc.dat from the pinned v2fly/domain-list-community release."
   type        = string
-  default     = "c383bc2487049f2bd49a54806c178098b990b08d4b1716140f9f9c86e7f15c71"
+  default     = "6cc4decf520dbfd96e1e3750661976eb31d2a5381090b8768cb2ab1528201fcf"
 }

@@ -183,7 +183,7 @@ resource "hcloud_primary_ip" "conduit" {
 resource "hcloud_server" "conduit" {
   name         = "conduit-station"
   server_type  = "cx23"
-  image        = "ubuntu-24.04"
+  image        = "ubuntu-26.04"
   location     = var.location
   ssh_keys     = [hcloud_ssh_key.conduit.id]
   firewall_ids = [hcloud_firewall.conduit.id]

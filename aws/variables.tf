@@ -46,7 +46,7 @@ variable "trust_domain" {
 variable "spire_version" {
   description = "SPIRE release version. Downloads the linux-arm64-musl tarball for Graviton (static; runs on Ubuntu)."
   type        = string
-  default     = "1.15.1"
+  default     = "1.16.0"
 }
 
 variable "spire_sha256" {
@@ -118,9 +118,9 @@ variable "gcp_trust_domain" {
 }
 
 variable "k3s_version" {
-  description = "Pinned k3s version (INSTALL_K3S_VERSION), e.g. v1.35.5+k3s1."
+  description = "Pinned k3s version (INSTALL_K3S_VERSION), e.g. v1.37.2+k3s1."
   type        = string
-  default     = "v1.35.5+k3s1"
+  default     = "v1.37.2+k3s1"
 }
 
 variable "k3s_installer_sha256" {
@@ -131,17 +131,17 @@ variable "k3s_installer_sha256" {
     scripts/get-checksums.sh, read the diff, then update the pin.
   EOT
   type        = string
-  default     = "e5cc3b3d9dfc1662c2d9be6da5abc9a4cd317d6abc3a5ffc02e3dd3248207fee"
+  default     = "c2a2643dd7c259121a876d16538844c60928de3d38ae98f22f7b95a7ffcfab9d"
 }
 
 variable "awscli_version" {
   description = "Pinned aws-cli v2 version. The unversioned zip URL moves, so no digest can describe it."
   type        = string
-  default     = "2.36.19"
+  default     = "2.40.1"
 }
 
 variable "awscli_zip_sha256" {
   description = "SHA-256 of awscli-exe-linux-aarch64-<awscli_version>.zip, verified before it is unpacked and run as root."
   type        = string
-  default     = "fb7a8cfd2a516a6b15560582fdc98c417fedffd39728d46fb6007b56b7c858d3"
+  default     = "ce999da382eac247be6bd000af1ee16f23a2d25e5906e7fd9a83e54c1ecf37c1"
 }

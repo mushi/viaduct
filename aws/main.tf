@@ -14,14 +14,14 @@
 # Rebuild the instance without disturbing the KMS-resident CA:
 #   terraform apply -replace=aws_instance.spire
 
-# ─── AMI: latest Canonical Ubuntu 24.04 (Noble) ARM64 ────────────────────────
+# ─── AMI: latest Canonical Ubuntu 26.04 (Resolute) ARM64───────────────────────
 data "aws_ami" "ubuntu" {
   most_recent = true
   owners      = ["099720109477"] # Canonical
 
   filter {
     name   = "name"
-    values = ["ubuntu/images/hvm-ssd*/ubuntu-noble-24.04-arm64-server-*"]
+    values = ["ubuntu/images/hvm-ssd*/ubuntu-resolute-26.04-arm64-server-*"]
   }
   filter {
     name   = "architecture"
@@ -214,9 +214,10 @@ resource "aws_iam_instance_profile" "spire" {
   role = aws_iam_role.spire.name
 }
 
-# Egress guardrail: a host timer reads month-to-date NetworkOut from CloudWatch
-# and stops THIS instance if it nears the 100 GB/mo free-tier cap. Grants only
-# CloudWatch read + stop-self (scoped to this instance's ARN).
+# Egress guardrail: a host timer reads month-to-date NetworkOut from CloudWatch,
+# throttles near the 100 GB/mo free-tier cap and pauses Conduit (a local kubectl scale)
+# at it. CloudWatch read is the only AWS permission it needs: nothing it does touches
+# the instance itself.
 resource "aws_iam_role_policy" "guardrail" {
   name = "egress-guardrail"
   role = aws_iam_role.spire.id
@@ -228,11 +229,6 @@ resource "aws_iam_role_policy" "guardrail" {
         Effect   = "Allow"
         Action   = ["cloudwatch:GetMetricStatistics"]
         Resource = "*"
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["ec2:StopInstances"]
-        Resource = aws_instance.spire.arn
       }
     ]
   })

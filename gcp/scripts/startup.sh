@@ -40,6 +40,32 @@ if [ -n "$BVS" ]; then
 fi
 unset BVS
 
+# ── 0. OS baseline: GNU coreutils, security updates, reboot policy ───────────
+# Ubuntu 26.04 defaults to the Rust coreutils (uutils); this script was written against
+# GNU behaviour (sha256sum checks on every pin, stat, base64), so switch back and fail
+# the boot if the switch did not take. The upgrade brings in kernel and ca-certificates
+# fixes; Vault is apt-held, so it never moves here. A kernel fix only takes effect after
+# a reboot, which unattended-upgrades now performs in the quiet hours when one is needed.
+# Every apt call waits for the dpkg lock: apt-daily and unattended-upgrades hold it at boot.
+export DEBIAN_FRONTEND=noninteractive
+APT="apt-get -o DPkg::Lock::Timeout=600 -y -q"
+$APT update
+# apt counts coreutils-from-uutils as essential (coreutils pre-depends on it or on the GNU
+# variant), so the swap must name the removal and allow it; coreutils stays provided
+# throughout because the GNU variant is installed in the same transaction.
+dpkg-query -W -f='${Status}' coreutils-from-gnu 2>/dev/null | grep -q 'install ok installed' \
+  || $APT --allow-remove-essential install coreutils-from-gnu coreutils-from-uutils-
+ls --version | head -n 1 | grep -q 'GNU coreutils' \
+  || { echo "FATAL - GNU coreutils not active (coreutils-from-gnu)" >&2; exit 1; }
+# --with-new-pkgs: a kernel fix arrives as a new package (linux-image-<version>), which
+# plain `upgrade` holds back; this installs new dependencies but never removes anything.
+$APT upgrade --with-new-pkgs
+cat > /etc/apt/apt.conf.d/52viaduct-auto-reboot <<'APTREBOOT'
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+Unattended-Upgrade::Automatic-Reboot-Time "03:30";
+APTREBOOT
+
 # ── 1. No swap (deliberate) ──────────────────────────────────────────────────
 # With mlock disabled (see vault.hcl), swap would be a path for in-memory
 # secrets to reach the disk in plaintext. zram (RAM-backed swap) is unavailable
@@ -760,6 +786,18 @@ DROPIN
   echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-wireguard-forward.conf
   sysctl -p /etc/sysctl.d/99-wireguard-forward.conf
 
+  # Ubuntu 26.04's AppArmor profile for `wg` only lets it read under /etc/wireguard. That
+  # denies the PostUp `wg set ... private-key` above on the tmpfs key (EACCES), and denies
+  # listing /run/wireguard/, where `wg show interfaces` looks for userspace sockets: wg-quick
+  # down then calls wg0 "not a WireGuard interface" and leaves it up, so every restart fails
+  # on "wg0 already exists". Allow exactly the directory listing and the key, read-only,
+  # through the profile's local include.
+  if [ -f /etc/apparmor.d/wg ]; then
+    install -d -m 0755 /etc/apparmor.d/local
+    printf '%s\n' "$(dirname "$WG_RUN_KEY")/ r," "${WG_RUN_KEY} r," > /etc/apparmor.d/local/wg
+    apparmor_parser -r /etc/apparmor.d/wg
+  fi
+
   systemctl daemon-reload
   systemctl enable wg-quick@wg0
   systemctl restart wg-quick@wg0
@@ -841,17 +879,20 @@ if [ -n "$ALLOY_SHA256" ]; then
       apt-get -o DPkg::Lock::Timeout=180 install -y -qq unzip >/dev/null 2>&1 || true
     fi
     AZIP="alloy-linux-amd64.zip"
+    # Disk-backed work dir: on Ubuntu 26.04 /tmp is a tmpfs capped at half of this box's
+    # ~1 GB RAM, too small for the zip plus the extracted binary, and every byte there is
+    # memory Vault needs.
+    AWORK="$(umask 077; mktemp -d /var/tmp/alloy-install.XXXXXXXX)"
     if ! command -v unzip >/dev/null 2>&1; then
       echo "alloy: unzip unavailable (dpkg lock held?); control-plane log shipper not installed" >&2
-    elif curl -fsSL -o "/tmp/$AZIP" "https://github.com/grafana/alloy/releases/download/${ALLOY_VERSION}/${AZIP}" \
-       && echo "${ALLOY_SHA256}  /tmp/$AZIP" | sha256sum -c - >/dev/null; then
-      ( cd /tmp && unzip -oq "$AZIP" && install -m 0755 alloy-linux-amd64 /usr/local/bin/alloy ) \
+    elif curl -fsSL -o "$AWORK/$AZIP" "https://github.com/grafana/alloy/releases/download/${ALLOY_VERSION}/${AZIP}" \
+       && echo "${ALLOY_SHA256}  $AWORK/$AZIP" | sha256sum -c - >/dev/null; then
+      ( cd "$AWORK" && unzip -oq "$AZIP" && install -m 0755 alloy-linux-amd64 /usr/local/bin/alloy ) \
         || echo "alloy: extraction failed; control-plane log shipper not installed" >&2
-      rm -f "/tmp/$AZIP" /tmp/alloy-linux-amd64
     else
       echo "alloy: download or checksum failed; control-plane log shipper not installed" >&2
-      rm -f "/tmp/$AZIP"
     fi
+    rm -rf "$AWORK"
   fi
 
   if command -v alloy >/dev/null 2>&1; then

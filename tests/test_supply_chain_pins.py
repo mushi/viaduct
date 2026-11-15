@@ -268,7 +268,7 @@ class RootInstallBehaviourTest(unittest.TestCase):
         for f in binp.iterdir():
             f.chmod(0o755)
 
-        script = ("log() { :; }\nK3S_VERSION=v1.35.5+k3s1\n"
+        script = ("log() { :; }\nK3S_VERSION=v1.37.2+k3s1\n"
                   + self.fragment('K3S_INSTALLER="$(umask 077; mktemp',
                                   'rm -f "$K3S_INSTALLER"', overrides))
         p = subprocess.run(["bash", "-c", script], capture_output=True, text=True,

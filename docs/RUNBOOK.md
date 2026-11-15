@@ -341,13 +341,13 @@ so change one variable at a time or you will not know which fixed it.
 ## Alerts
 
 Alert rules are code, in the `grafana/` root. Several conditions keep the system running
-rather than failing, and a guardrail stop leaves the AWS node down with nothing else to
-say so, so these rules are the only notice:
+rather than failing, so these rules are the only notice:
 
 | Rule (group) | Fires on | Meaning |
 |---|---|---|
-| AWS node silent (`Viaduct AWS egress`) | no `aws_mtd_egress_reading_valid` for ~30 min | Stopped (the egress guardrail at the cap, which nothing restarts), crashed, or Alloy not shipping |
-| AWS egress near cap | MTD egress > 90% of `aws_egress_cap_bytes` | The guardrail stops the node on two consecutive readings over the cap |
+| AWS node silent (`Viaduct AWS egress`) | no `aws_mtd_egress_reading_valid` for ~30 min | Stopped, crashed, or Alloy not shipping. Never the cap: the guardrail pauses Conduit and leaves the node up |
+| AWS egress near cap | MTD egress > 90% of `aws_egress_cap_bytes` | The guardrail pauses Conduit on two consecutive readings over the cap |
+| Conduit paused at egress cap | `aws_conduit_paused == 1` | Conduit is paused for the rest of the month; the guardrail resumes it on its own |
 | AWS egress throttled | `aws_egress_throttled == 1` for 1h | Something is spending the egress budget; the node is shaped and still serving |
 | AWS egress reading unavailable | `aws_mtd_egress_reading_valid == 0` for 1h | CloudWatch cannot be read, so **the egress cap is not being enforced** |
 | AWS egress state not persisted | `aws_egress_state_persisted == 0` for 30m | The guardrail cannot write state, so **the egress cap is not being enforced** |
@@ -360,6 +360,11 @@ switch (`Viaduct evaluation group`), the notification policy tree, the `Alerting
 stays UI-managed and is referenced by name, so its integration URL never enters code or state.
 A rule group is written whole, so keep group names unique: two definitions of one name would
 overwrite each other.
+
+A rule whose query cannot run (a Grafana Cloud datasource timeout) keeps its previous
+state, so a flaky datasource neither pages once per rule nor re-fires a standing alert. The
+dead man's switch is the exception: it alerts after 5 min of failed evaluation, which is the
+one signal that alerting itself is blind. Firing alerts repeat every 12h.
 
 Apply (needs a service account token with the Editor role):
 
@@ -450,14 +455,24 @@ same sequence as the [restore block in `startup.sh`](../gcp/scripts/startup.sh#L
 keys (the temporary init token is invalidated by the restore). Do not run
 `vault operator init` and stop there: that forks a new empty Vault instead of restoring.
 
-**AWS node stopped by the egress guardrail.** The guardrail stops the instance after two
-consecutive readings over the 90 GB/month cap, and nothing starts it again. "AWS node silent"
-fires; confirm the cause in Loki with `{node="aws", unit="egress-guardrail.service"} |= "CAP EXCEEDED"`.
+**Conduit paused by the egress guardrail.** After two consecutive readings over the 90 GB/month
+cap the guardrail scales Conduit to zero and marks the deployment `viaduct-paused-by=egress-guardrail`.
+The node, SPIRE, the mesh and monitoring stay up, and "Conduit paused at egress cap" fires. Nothing
+needs doing: the first valid reading under the cap (on the 1st, when CloudWatch's month-to-date sum
+resets) scales Conduit back up and removes the mark. Confirm in Loki with
+`{node="aws", unit="egress-guardrail.service"} |~ "Conduit (paused|resumed)"`.
 
-Start it only once a new month has begun. The guardrail keeps its last reading on disk
-(`/var/lib/viaduct-guardrail/last`) and that reading is over the cap, so a start in the same
-month meets a second over-cap reading within 15 minutes and stops again. From the 1st,
-CloudWatch's month-to-date sum resets and the node stays up.
+The guardrail only resumes a pause it marked, so a scale-down made by hand stays put. If Conduit is
+still paused after the 1st, the guardrail is not getting a valid reading (see "AWS egress reading
+unavailable"). Resuming by hand mid-month spends past the cap, at ~$0.11/GB. On the node:
+
+```sh
+sudo k3s kubectl -n viaduct scale deploy conduit --replicas=1
+sudo k3s kubectl -n viaduct annotate deploy conduit viaduct-paused-by-
+```
+
+**AWS node stopped.** The guardrail never stops the instance, so a stopped node was stopped by hand or
+by AWS. "AWS node silent" fires. Start it:
 
 ```sh
 cd aws
@@ -469,9 +484,7 @@ A stop/start keeps the disk and the Elastic IP, so nothing else is needed: no me
 no federation push. "AWS node silent" resolves within a few minutes. To check the node, open
 `aws ssm start-session --region ap-south-1 --target "$(terraform output -raw instance_id)"`
 and run `sudo wg show wg0 latest-handshakes; systemctl is-active spire-server spire-agent k3s`.
-
-Do not `terraform apply` to bring it back: Terraform does not start a stopped instance, and
-the apply would only carry whatever else is pending.
+Do not `terraform apply` to bring it back: Terraform does not start a stopped instance.
 
 ## Teardown
 

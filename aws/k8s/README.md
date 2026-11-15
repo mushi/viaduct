@@ -58,7 +58,7 @@ placeholder in `20` first (`sed "s|__GCP_CONTROL_PLANE_IP__|<gcp-ip>|g"`).
 ## Notes
 
 - The k8s SA token and the SPIRE entry aren't vendored as YAML, they depend on a runtime instance-id and a host-minted token (see [Hardening](#hardening)).
-- Egress cost is bounded by the host `egress-guardrail` timer: it throttles egress (tc/htb, mesh exempt) at 70% of the cap, then stops the instance near 90 GB/mo. The gauge `aws_mtd_egress_bytes` / `aws_egress_cap_bytes` reaches Grafana via the Alloy unix-exporter textfile collector.
+- Egress cost is bounded by the host `egress-guardrail` timer: it throttles egress (tc/htb, mesh exempt) at 70% of the cap, then pauses Conduit (scales it to zero) at 90 GB/mo and resumes it when the month turns. The gauge `aws_mtd_egress_bytes` / `aws_egress_cap_bytes` reaches Grafana via the Alloy unix-exporter textfile collector.
 
 ## Hardening
 

@@ -13,7 +13,10 @@ resource "grafana_rule_group" "dead_mans_switch" {
     for       = "5m"
     is_paused = false
 
-    no_data_state  = "Alerting"
+    no_data_state = "Alerting"
+    # The only rule that reports a query it cannot run. Every other rule keeps its last
+    # state through datasource errors, so this is the single signal that alerting itself
+    # is blind; `for` keeps a timeout shorter than 5 min from paging.
     exec_err_state = "Error"
     annotations = {
       description = "Dead man's switch: fires when the probe or box is down."
@@ -75,6 +78,9 @@ resource "grafana_rule_group" "dead_mans_switch" {
 resource "grafana_notification_policy" "root" {
   contact_point = var.contact_point
   group_by      = ["grafana_folder", "alertname"]
+  # Several alerts stay firing for days by design (a guardrail-stopped node is down until
+  # the month turns). At the 4h default that is six identical reminders a day.
+  repeat_interval = "12h"
 
   policy {
     contact_point = var.contact_point

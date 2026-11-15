@@ -4,7 +4,7 @@
 #   SPIRE server (KMS-rooted trust domain viaduct.aws, federated with viaduct.gcp)
 #   SPIRE agent (aws_iid; unix + k8s WorkloadAttestors)
 #   k3s + workloads (CSI driver, Conduit, Alloy)
-#   egress guardrail (auto-stop near the free-tier cap)
+#   egress guardrail (throttle, then pause Conduit, at the free-tier cap)
 # Cross-cloud steps (federation bundle, vault.crt, Alloy) run as a retrying unit,
 # self-healing once the GCP control plane is reachable.
 #
@@ -33,9 +33,28 @@ NODE_NAME="$(hostname)"
 log "starting Viaduct AWS node provisioning (region=$REGION, trust_domain=$TRUST_DOMAIN)"
 
 # ─── 1. base packages ─────────────────────────────────────────────────────────
+# Ubuntu 26.04 defaults to the Rust coreutils (uutils); this script was written against
+# GNU behaviour (sha256sum --check --strict on every pin), so switch back and fail the boot
+# if the switch did not take. The upgrade brings in kernel and ca-certificates fixes; a
+# kernel fix only takes effect after a reboot, which unattended-upgrades performs in the
+# quiet hours when one is needed. Every apt call waits for the dpkg lock held at boot.
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq curl unzip ca-certificates openssl >/dev/null
+APT="apt-get -o DPkg::Lock::Timeout=600 -y -qq"
+$APT update
+# apt counts coreutils-from-uutils as essential, so the swap names the removal and allows
+# it; coreutils stays provided because the GNU variant lands in the same transaction.
+$APT --allow-remove-essential install coreutils-from-gnu coreutils-from-uutils- >/dev/null
+ls --version | head -n 1 | grep -q 'GNU coreutils' \
+  || { log "FATAL: GNU coreutils not active (coreutils-from-gnu)"; exit 1; }
+# --with-new-pkgs: a kernel fix arrives as a new package (linux-image-<version>), which
+# plain `upgrade` holds back; this installs new dependencies but never removes anything.
+$APT upgrade --with-new-pkgs >/dev/null
+$APT install curl unzip ca-certificates openssl >/dev/null
+cat > /etc/apt/apt.conf.d/52viaduct-auto-reboot <<'APTREBOOT'
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+Unattended-Upgrade::Automatic-Reboot-Time "03:30";
+APTREBOOT
 
 # Persist journald so the Alloy pod (which mounts /var/log/journal read-only) can ship
 # spire-server / k3s / sshd records to Loki. Volatile /run/log/journal would vanish on
@@ -273,11 +292,12 @@ if [ -n "$AGENT_ID" ]; then
     -dns vault-agent.aws || true
 fi
 
-# ─── 9. aws-cli v2 + egress guardrail (auto-stop near free-tier cap) ──────────
+# ─── 9. aws-cli v2 + egress guardrail (pause Conduit at the free-tier cap) ────
 # The zip is unpacked and its installer executed as root, so anything able to
 # answer for awscli.amazonaws.com obtains root here. The unversioned URL is a
 # moving target no digest can describe, so pin the version too.
-AWSCLI_DIR="$(umask 077; mktemp -d /tmp/awscli.XXXXXXXX)"
+# On disk: Ubuntu 26.04 mounts /tmp as tmpfs, and the unpacked CLI (~300 MB) would sit in RAM.
+AWSCLI_DIR="$(umask 077; mktemp -d /var/tmp/awscli.XXXXXXXX)"
 curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64-${awscli_version}.zip" \
   -o "$AWSCLI_DIR/awscliv2.zip"
 echo "${awscli_zip_sha256}  $AWSCLI_DIR/awscliv2.zip" | sha256sum --check --strict - \
@@ -289,7 +309,7 @@ ${guardrail_script}
 GUARDRAIL
 cat > /etc/systemd/system/egress-guardrail.service <<'EOF'
 [Unit]
-Description=Conduit egress guardrail (stop instance near free-tier cap)
+Description=Conduit egress guardrail (throttle, then pause Conduit, at the free-tier cap)
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/egress-guardrail.sh
@@ -350,6 +370,14 @@ systemctl start --no-block viaduct-crosscloud.service
 # the persisted conf + key. A rebuild regenerates the key, and the provisioner
 # re-registers the new public key with the hub.
 apt-get install -y -qq wireguard-tools >/dev/null
+# Ubuntu 26.04's AppArmor profile for `wg` denies listing /run/wireguard/ (where `wg show
+# interfaces` looks for userspace sockets), so wg-quick down leaves wg0 up and every later
+# restart fails on "already exists". Allow that one directory listing.
+if [ -f /etc/apparmor.d/wg ]; then
+  install -d -m 0755 /etc/apparmor.d/local
+  printf '%s\n' '/run/wireguard/ r,' > /etc/apparmor.d/local/wg
+  apparmor_parser -r /etc/apparmor.d/wg
+fi
 install -d -m 0700 /etc/wireguard
 if [ ! -f /etc/wireguard/wg0.key ]; then
   ( umask 077; wg genkey > /etc/wireguard/wg0.key )

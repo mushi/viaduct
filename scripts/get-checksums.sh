@@ -97,13 +97,13 @@ get_var() {
   echo "$default"
 }
 
-CONDUIT_VERSION=$(get_var "conduit_version"            "release-cli-2.0.0")
-XRAY_VERSION=$(get_var "xray_version"                  "v26.4.25")
-ALLOY_VERSION=$(get_var "alloy_version"                "v1.8.3")
-XRAY_EXPORTER_VERSION=$(get_var "xray_exporter_version" "v0.2.0")
-GEOIP_VERSION=$(get_var "geoip_version"                "202608050239")
-GEOSITE_VERSION=$(get_var "geosite_version"            "20260807145230")
-AWSCLI_VERSION=$(get_var "awscli_version"              "2.36.19")
+CONDUIT_VERSION=$(get_var "conduit_version"            "release-cli-2.1.0")
+XRAY_VERSION=$(get_var "xray_version"                  "v26.11.9")
+ALLOY_VERSION=$(get_var "alloy_version"                "v1.21.3")
+XRAY_EXPORTER_VERSION=$(get_var "xray_exporter_version" "v0.6.9")
+GEOIP_VERSION=$(get_var "geoip_version"                "202611080027")
+GEOSITE_VERSION=$(get_var "geosite_version"            "20261110034535")
+AWSCLI_VERSION=$(get_var "awscli_version"              "2.40.1")
 
 echo "Fetching digests from the GitHub Releases API:"
 echo "  conduit          $CONDUIT_VERSION"

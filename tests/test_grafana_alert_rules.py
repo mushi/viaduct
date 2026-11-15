@@ -61,6 +61,21 @@ class GrafanaAlertRulesTest(unittest.TestCase):
                     self.assertNotRegex(expr, r"(>|<|==|!=)(?!=)",
                                         "comparison inside the query of a NoData=Alerting rule")
 
+    def test_only_the_dead_mans_switch_reports_query_errors(self):
+        """A datasource timeout must not page once per rule.
+
+        With exec_err_state = Error on every rule, a flaky Grafana Cloud datasource sent a
+        DatasourceError per rule and re-fired a standing alert on each timeout (2026-10-20/21).
+        Everything else keeps its last state; the dead man's switch alone reports blindness.
+        """
+        text = "\n".join(f.read_text() for f in sorted(GRAFANA.glob("*.tf")))
+        states = re.findall(r'exec_err_state\s*=\s*"([^"]+)"', text)
+        self.assertGreaterEqual(len(states), 2, "anchor: exec_err_state not found")
+        self.assertEqual(states.count("Error"), 1, f"exactly one rule may report query errors: {states}")
+        self.assertTrue(set(states) <= {"Error", "KeepLast"}, f"unexpected exec_err_state: {states}")
+        dms = (GRAFANA / "alerting.tf").read_text()
+        self.assertRegex(dms, r'exec_err_state\s*=\s*"Error"', "the dead man's switch must keep Error")
+
     def test_every_managed_dashboard_file_exists_and_is_classic_json(self):
         files = re.findall(r'=\s*"([a-z0-9-]+\.json)"', (GRAFANA / "dashboards.tf").read_text())
         self.assertGreaterEqual(len(files), 6, "anchor: dashboard map not parsed")

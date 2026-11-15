@@ -32,7 +32,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       initContainers:
       - name: fetch-svid
-        image: ghcr.io/spiffe/spire-agent@sha256:501ea7072748adb74d1f9ac3320ddceedcf3b8c4a1cc9d2b4bedd427d277475b # 1.15.1
+        image: ghcr.io/spiffe/spire-agent@sha256:ab3a8ce70435374cc5d84c81eabf0278dc046ddbc0a736d59694ba9e5975b1b6 # 1.16.0
         command: ["/opt/spire/bin/spire-agent", "api", "fetch", "x509", "-socketPath", "/spiffe-workload-api/api.sock", "-write", "/svids"]
         resources:
           requests: { memory: 32Mi, cpu: 50m }
@@ -48,7 +48,7 @@ spec:
       # fetch-hetzner-secrets.sh: establish trust (fetch GCP's cert over the mesh) ->
       # authenticate (SVID) -> fetch (kv/aws/grafana) -> render.
       - name: vault-fetch
-        image: hashicorp/vault@sha256:3fd53308acccd9e4e83fde3e6c6cf5b15e0f7fac1ff7510780b8b23f5e4c3de7 # 2.0.2
+        image: hashicorp/vault@sha256:dfa48c2fa2b0099ccb47681ec5c4804bf5aec9d6879ecfee07ad4b92a5427ad6 # 2.2.2
         env:
         - { name: VAULT_ADDR, value: "https://__GCP_CONTROL_PLANE_IP__:8200" }
         command: ["/bin/sh", "-c"]
@@ -198,7 +198,7 @@ spec:
         - { name: rendered, mountPath: /rendered }
       containers:
       - name: alloy
-        image: grafana/alloy@sha256:ab04df3936e4d71d31b6f55e0c58a7e749091f59635dd8c2bc731ba1b6c93701 # v1.8.3
+        image: grafana/alloy@sha256:8ab871206bd2d8f89277f53abffee5f452a293980788d52f85fa183a87a505a4 # v1.21.3
         # Loopback, not 0.0.0.0. Inside the pod netns 0.0.0.0 resolves to the pod IP,
         # which any process in the NODE's netns can dial — and kube-router does not
         # filter node-originated traffic to a local pod, so the NetworkPolicy below
