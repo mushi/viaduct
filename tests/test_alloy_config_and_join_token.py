@@ -279,7 +279,7 @@ class JoinTokenNotInArgvTest(unittest.TestCase):
                          if not l.lstrip().startswith("#"))
         self.assertNotIn("-joinToken", body,
                          "the provisioner still builds a -joinToken argument")
-        self.assertIn('printf \'%s\\n\' "$TOKEN" | $SSH', body,
+        self.assertIn('printf \'%s\\n\' "$TOKEN" | rssh_stdin', body,
                       "the token is no longer piped over stdin to the setter")
 
 

@@ -43,6 +43,20 @@ repo-root `terraform apply` (re-runs `scripts/provision.sh`, a few-second servic
 rebuild); a GCP change needing an instance stop (`machine_type`, shielded config) adds
 `-var 'allow_stopping_for_update=true'`.
 
+`provision.sh` talks to Hetzner over one SSH connection for the whole run, so a router's
+intrusion prevention sees a single session, not a burst. While the box boots it backs off
+(15s, 30s, then every 60s, up to 10 min); if the connection drops mid-run it reconnects and
+retries, so a blip no longer fails the apply. After a rebuild it also reboots the box once
+if a kernel update is installed but not running; routine applies leave that to the 03:30
+window. For your own SSH sessions, the same sharing in `~/.ssh/config` keeps them quiet too:
+
+```
+Host <hetzner-ip>
+  ControlMaster auto
+  ControlPath ~/.ssh/cm-%C
+  ControlPersist 10m
+```
+
 ## If an apply or boot stops
 
 Everything below is deliberate fail-closed behaviour. Match the message, run the fix.

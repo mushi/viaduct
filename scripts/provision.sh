@@ -9,11 +9,8 @@
 #   USERS_FILE   — local path to the generated users.txt
 #   ALLOY_CONFIG — local path to the rendered alloy-config.alloy
 #
-# Uses SSH ControlMaster multiplexing so that all SSH and SCP operations
-# share a single underlying TCP connection. This avoids triggering the
-# SSH daemon's MaxStartups limit (which causes "Connection timed out"
-# errors when many sequential connections are opened rapidly) and is
-# significantly faster overall.
+# Every SSH and SCP operation shares one connection, opened once per run (see
+# "One SSH connection per run" below).
 
 set -euo pipefail
 
@@ -33,9 +30,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Expand ~ in SSH_KEY_PATH (Terraform passes it literally if set in tfvars)
 SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$HOME}"
 
-# ── SSH ControlMaster setup ───────────────────────────────────────────────────
-# A temp socket file is used as the ControlPath. All subsequent ssh/scp calls
-# reference this socket and reuse the single authenticated connection.
+# ── One SSH connection per run ────────────────────────────────────────────────
+# Intrusion prevention between the operator and the node (seen on a home router)
+# treats a stream of short-lived SSH connections as a brute-force attempt and
+# drops the traffic. So a run opens ONE master connection and holds it:
+#   - ssh_connect opens it, backing off 15s → 30s → 60s while the box boots
+#     (about a dozen attempts over ten minutes, not one every 10s);
+#   - every command and copy rides on it with ControlMaster=no, so none of them
+#     can quietly open a connection of its own;
+#   - ControlPersist keeps it across idle stretches (the probe build) and lets it
+#     lapse ten minutes after the run if the exit trap never fired;
+#   - if it drops, rssh/rscp reconnect the same way and retry the command.
 
 CONTROL_DIR=$(mktemp -d)
 CONTROL_SOCKET="${CONTROL_DIR}/ssh-ctl.sock"
@@ -47,22 +52,88 @@ BASE_OPTS=(
   -o UserKnownHostsFile="${BACKUPS_DIR}/known_hosts"
   -o BatchMode=yes
   -o ConnectTimeout=10
-  -o ControlMaster=auto
   -o ControlPath="${CONTROL_SOCKET}"
-  -o ControlPersist=60
   -o ServerAliveInterval=15
   -o ServerAliveCountMax=4
   -o LogLevel=ERROR
 )
-
-SSH="ssh ${BASE_OPTS[*]} deploy@${SERVER_IP}"
-# SCP also supports ControlPath — it reuses the master connection
-SCP="scp -q ${BASE_OPTS[*]}"
+CLIENT_OPTS=("${BASE_OPTS[@]}" -o ControlMaster=no)
 
 log()    { echo "[provision] $*"; }
+
+ssh_master_up() {
+  ssh -o ControlPath="${CONTROL_SOCKET}" -O check "deploy@${SERVER_IP}" >/dev/null 2>&1
+}
+
+# ssh_connect <budget-seconds>: open the master connection unless it is already up.
+# A connection-level failure (refused, timed out, no route) is retried with backoff
+# until the budget runs out; a host-key or authentication failure will never resolve
+# by retrying, so it stops the run at once with the cause and the fix.
+ssh_connect() {
+  local budget="${1:-300}" delay=15 deadline err
+  ssh_master_up && return 0
+  deadline=$(( SECONDS + budget ))
+  while :; do
+    if err=$(ssh "${BASE_OPTS[@]}" -o ControlMaster=yes -o ControlPersist=10m \
+               -fN "deploy@${SERVER_IP}" 2>&1); then
+      return 0
+    fi
+    if printf '%s' "$err" | grep -qiE 'host key|identification has changed|permission denied|authenticat'; then
+      log "ERROR: SSH to ${SERVER_IP} failed for a non-transient reason — not a boot delay:"
+      printf '%s\n' "$err" | sed 's/^/  | /'
+      log "  A rebuild is auto-detected from the hcloud server id; this key changed"
+      log "  WITHOUT a new id. If that was an intended out-of-band change, re-apply with"
+      log "  VIADUCT_HOST_KEY_RESET=1 (or clear the pin: ssh-keygen -R ${SERVER_IP} -f ${BACKUPS_DIR}/known_hosts)."
+      exit 1
+    fi
+    if (( SECONDS + delay > deadline )); then
+      log "ERROR: ${SERVER_IP} did not accept SSH within ${budget}s. Last error:"
+      printf '%s\n' "$err" | sed 's/^/  | /'
+      return 1
+    fi
+    log "  ${SERVER_IP} not reachable yet; retrying in ${delay}s..."
+    sleep "$delay"
+    delay=$(( delay * 2 > 60 ? 60 : delay * 2 ))
+  done
+}
+
+# rssh <command...>: run a command over the shared connection. Exit status 255 with
+# the master gone means the connection dropped, not that the command failed, so
+# reconnect and retry (up to three attempts). Every command passed here is safe to
+# repeat. Never use it with stdin: a retry cannot replay what was already read.
+rssh() {
+  local attempt rc=255
+  for attempt in 1 2 3; do
+    ssh_connect 300 || return 255
+    ssh "${CLIENT_OPTS[@]}" "deploy@${SERVER_IP}" -- "$@" && return 0 || rc=$?
+    if [ "$rc" -ne 255 ] || ssh_master_up; then return "$rc"; fi
+    log "  SSH connection dropped; reconnecting (attempt ${attempt} of 3)..."
+  done
+  return "$rc"
+}
+
+# rssh_stdin <command...>: as rssh, for a command that reads stdin. Reconnects first
+# if needed, but never retries the command itself.
+rssh_stdin() {
+  ssh_connect 300 || return 255
+  ssh "${CLIENT_OPTS[@]}" "deploy@${SERVER_IP}" -- "$@"
+}
+
+# rscp <src> <remote-dst>: copy over the shared connection, retrying a dropped one.
+rscp() {
+  local attempt rc=255
+  for attempt in 1 2 3; do
+    ssh_connect 300 || return 255
+    scp -q "${CLIENT_OPTS[@]}" "$1" "deploy@${SERVER_IP}:$2" && return 0 || rc=$?
+    ssh_master_up && return "$rc"
+    log "  SSH connection dropped during a copy; reconnecting (attempt ${attempt} of 3)..."
+  done
+  return "$rc"
+}
+
 # Provisioner connects as the non-root `deploy` user (root SSH login is disabled
 # in cloud-init). deploy has NOPASSWD sudo, so privileged work is `sudo`-wrapped.
-remote() { $SSH -- sudo "$@"; }
+remote() { rssh sudo "$@"; }
 
 upload() {
   local src="$1" dst="$2" perms="${3:-0644}"
@@ -72,11 +143,11 @@ upload() {
   # symlink pre-created there receives the uploaded content — which includes
   # keypair.env and client UUIDs. Let the remote side pick an unpredictable name.
   local stage
-  stage="$($SSH -- 'umask 077; mktemp /tmp/prov.XXXXXXXXXX')"
+  stage="$(rssh 'umask 077; mktemp /tmp/prov.XXXXXXXXXX')"
   [ -n "$stage" ] || { log "ERROR: could not create a staging file on ${SERVER_IP}"; return 1; }
-  $SCP "$src" "deploy@${SERVER_IP}:${stage}"
+  rscp "$src" "${stage}"
   remote install -m "$perms" "$stage" "$dst"
-  $SSH -- rm -f "$stage"
+  rssh rm -f "$stage"
   log "Uploaded $(basename "$src") → $dst"
 }
 
@@ -125,33 +196,21 @@ if [ "${VIADUCT_HOST_KEY_RESET:-0}" = "1" ] || \
 else
   REBUILT=0
 fi
+# A fresh node: rebuilt, or never fully provisioned (no server id recorded yet). Only a
+# fresh node is rebooted into an installed kernel fix here (§11); a live one waits for
+# the 03:30 unattended-upgrades window.
+if [ "$REBUILT" = 1 ] || [ ! -f "${BACKUPS_DIR}/known_hosts.serverid" ]; then
+  FRESH=1
+else
+  FRESH=0
+fi
 
 vh_reset_host_key_pin_if_requested "${SERVER_IP}" "${BACKUPS_DIR}/known_hosts" \
   "${SERVER_ID:-}" "${BACKUPS_DIR}/known_hosts.serverid"
 
-# ── Phase A: wait for SSH to succeed (bounded ~10 min); establishes the master.
+# ── Phase A: wait for SSH to succeed (bounded ~10 min); opens the one connection.
 log "Waiting for ${SERVER_IP} to accept SSH (up to 10 min)..."
-BOOT_DEADLINE=$(( SECONDS + 600 ))
-until ssh_err=$($SSH -- true 2>&1); do
-  # $SSH returned non-zero. A connection-level failure (refused / timed out /
-  # no route) means the box is still booting → keep waiting. A host-key or auth
-  # failure will NEVER resolve by retrying → fail fast with the cause.
-  if echo "$ssh_err" | grep -qiE 'host key|identification has changed|permission denied|authenticat'; then
-    log "ERROR: SSH to ${SERVER_IP} failed for a non-transient reason — not a boot delay:"
-    printf '%s\n' "$ssh_err" | sed 's/^/  | /'
-    log "  A rebuild is auto-detected from the hcloud server id; this key changed"
-    log "  WITHOUT a new id. If that was an intended out-of-band change, re-apply with"
-    log "  VIADUCT_HOST_KEY_RESET=1 (or clear the pin: ssh-keygen -R ${SERVER_IP} -f ${BACKUPS_DIR}/known_hosts)."
-    exit 1
-  fi
-  if (( SECONDS >= BOOT_DEADLINE )); then
-    log "ERROR: timed out after 10 min — ${SERVER_IP} never accepted SSH. Last error:"
-    printf '%s\n' "$ssh_err" | sed 's/^/  | /'
-    exit 1
-  fi
-  log "  not reachable yet (still booting?), retrying in 10s..."
-  sleep 10
-done
+ssh_connect 600 || exit 1
 log "SSH established."
 # The server-id record is written at the very END of this script, not here: it is the
 # baseline that detects the NEXT rebuild, and it must not advance until provisioning
@@ -361,8 +420,8 @@ PersistentKeepalive = 25
 EOF
 )"
   # Compound write to a root-owned 0600 path: pipe in and let one sudo shell write it.
-  printf '%s\n' "$WG_CONF" | $SSH -- "sudo sh -c 'umask 077; cat > /etc/wireguard/wg0.conf'"
-  $SSH -- "sudo sh -c 'systemctl daemon-reload && systemctl enable wg-quick@wg0 && systemctl restart wg-quick@wg0'"
+  printf '%s\n' "$WG_CONF" | rssh_stdin "sudo sh -c 'umask 077; cat > /etc/wireguard/wg0.conf'"
+  rssh "sudo sh -c 'systemctl daemon-reload && systemctl enable wg-quick@wg0 && systemctl restart wg-quick@wg0'"
   sleep 2
   if remote "wg show wg0 >/dev/null 2>&1"; then
     log "WireGuard mesh: wg0 up (hub 10.99.0.1, self ${WG_MESH_IP})."
@@ -393,8 +452,8 @@ EOF
     # Never as an argument: an EnvironmentFile expanded into ExecStart put the token
     # in /proc/<pid>/cmdline, and a token on this command line would be visible in
     # the node's own process list just as plainly.
-    printf '%s\n' "$TOKEN" | $SSH -- "sudo /usr/local/sbin/spire-agent-join-token"
-    $SSH -- "sudo sh -c 'systemctl daemon-reload && systemctl enable --now spire-agent'"
+    printf '%s\n' "$TOKEN" | rssh_stdin "sudo /usr/local/sbin/spire-agent-join-token"
+    rssh "sudo sh -c 'systemctl daemon-reload && systemctl enable --now spire-agent'"
     sleep 3
     if remote "systemctl is-active --quiet spire-agent"; then
       log "SPIRE agent attested and running."
@@ -521,7 +580,35 @@ while IFS= read -r rf <&3; do
       log "  Saved backups/clients/$name"
     fi
   fi
-done 3< <($SSH -- "sudo sh -c 'ls /etc/xray/clients/*.uuid /etc/xray/clients/*.txt 2>/dev/null || true'")
+done 3< <(rssh "sudo sh -c 'ls /etc/xray/clients/*.uuid /etc/xray/clients/*.txt 2>/dev/null || true'")
+
+# ── 11. Run the installed kernel ──────────────────────────────────────────────
+# The boot baseline installs kernel fixes, but the node keeps running the kernel it
+# booted until something reboots it. A fresh node is rebooted now, so it never serves
+# on a kernel with a known fix pending; a live node is left to the 03:30 window.
+if remote "grep -q '^linux-' /run/reboot-required.pkgs" 2>/dev/null; then
+  if [ "$FRESH" = 1 ]; then
+    log "A kernel update is installed but not running; rebooting into it..."
+    # Not rssh: a retry after the connection drops would reboot the node a second time.
+    # --no-block returns before the shutdown begins.
+    ssh "${CLIENT_OPTS[@]}" "deploy@${SERVER_IP}" -- sudo systemctl reboot --no-block || true
+    ssh -o ControlPath="${CONTROL_SOCKET}" -O exit "deploy@${SERVER_IP}" >/dev/null 2>&1 || true
+    sleep 30   # let sshd stop, so the reconnect below does not reach the old boot
+    ssh_connect 600 || { log "ERROR: ${SERVER_IP} did not come back after the kernel reboot."; exit 1; }
+    if remote "grep -q '^linux-' /run/reboot-required.pkgs" 2>/dev/null; then
+      log "ERROR: still not running the installed kernel after a reboot ($(rssh uname -r))."
+      exit 1
+    fi
+    log "Running kernel $(rssh uname -r)."
+    if remote systemctl is-active --quiet conduit xray xray-exporter xray-user-stats xray-probe-client probe; then
+      log "All services active after the reboot."
+    else
+      log "WARNING: one or more services did not come back after the reboot. Check: journalctl -u conduit -u xray -u xray-exporter -u xray-user-stats -u probe"
+    fi
+  else
+    log "NOTE: a kernel update is installed but not running; unattended-upgrades reboots into it at 03:30."
+  fi
+fi
 
 log ""
 log "Provisioning complete."
