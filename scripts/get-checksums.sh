@@ -56,11 +56,11 @@ get_var() {
 
   # Try terraform.tfvars first
   if [[ -f "$TFVARS" ]]; then
+    # The value between the first pair of double quotes. POSIX awk (split, not
+    # gawk's 3-argument match), so it also works with macOS's awk.
     val=$(awk -v key="$name" '
       $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
-        # Extract the value between the first pair of double-quotes on the line
-        match($0, /"([^"]+)"/, arr)
-        if (arr[1] != "") { print arr[1]; exit }
+        if (split($0, q, "\"") >= 3 && q[2] != "") { print q[2]; exit }
       }
     ' "$TFVARS" 2>/dev/null || true)
     [[ -n "$val" ]] && { echo "$val"; return; }
@@ -71,8 +71,7 @@ get_var() {
     val=$(awk -v key="$name" '
       /variable[[:space:]]+"/ && $0 ~ "\"" key "\"" { found=1 }
       found && /default[[:space:]]*=/ {
-        match($0, /"([^"]+)"/, arr)
-        if (arr[1] != "") { print arr[1]; exit }
+        if (split($0, q, "\"") >= 3 && q[2] != "") { print q[2]; exit }
       }
       found && /^}/ { found=0 }
     ' "$DEFAULTS_FILE" 2>/dev/null || true)
@@ -82,12 +81,12 @@ get_var() {
   echo "$default"
 }
 
-CONDUIT_VERSION=$(get_var "conduit_version"            "release-cli-2.0.0")
-XRAY_VERSION=$(get_var "xray_version"                  "v26.4.25")
-ALLOY_VERSION=$(get_var "alloy_version"                "v1.8.3")
-XRAY_EXPORTER_VERSION=$(get_var "xray_exporter_version" "v0.2.0")
-GEOIP_VERSION=$(get_var "geoip_version"                "202608050239")
-GEOSITE_VERSION=$(get_var "geosite_version"            "20260807145230")
+CONDUIT_VERSION=$(get_var "conduit_version"            "release-cli-2.1.0")
+XRAY_VERSION=$(get_var "xray_version"                  "v26.11.9")
+ALLOY_VERSION=$(get_var "alloy_version"                "v1.21.3")
+XRAY_EXPORTER_VERSION=$(get_var "xray_exporter_version" "v0.6.9")
+GEOIP_VERSION=$(get_var "geoip_version"                "202611080027")
+GEOSITE_VERSION=$(get_var "geosite_version"            "20261110034535")
 
 echo "Fetching digests from the GitHub Releases API:"
 echo "  conduit          $CONDUIT_VERSION"

@@ -10,7 +10,6 @@
 #   • Touch /var/lib/cloud-init-done to signal the provisioner it can proceed
 
 package_update: true
-package_upgrade: true
 packages:
   - curl
   - ca-certificates
@@ -40,7 +39,11 @@ users:
       - ${ops_ssh_public_key}
     # Genuine least-privilege for interactive debugging: inspect + service
     # lifecycle only, no file writes (systemctl fixed to status/restart/reload).
-    sudo: "ALL=(root) NOPASSWD: /usr/bin/systemctl status *, /usr/bin/systemctl restart *, /usr/bin/systemctl reload *, /usr/bin/journalctl *"
+    # journalctl is reached only through a wrapper: a sudo wildcard matches the
+    # entire remaining argument string, so `journalctl *` also granted
+    # --vacuum-time, which destroys the audit record. The wildcard below is on the
+    # wrapper, which validates its own input — that is where the boundary lives.
+    sudo: "ALL=(root) NOPASSWD: /usr/bin/systemctl status *, /usr/bin/systemctl restart *, /usr/bin/systemctl reload *, /usr/local/bin/ops-journal, /usr/local/bin/ops-journal *"
 
 write_files:
 
@@ -52,6 +55,41 @@ write_files:
       PermitRootLogin no
       PasswordAuthentication no
       AllowUsers deploy ops
+
+  # ── ops journal wrapper ───────────────────────────────────────────────────
+  # The only way ops reaches journalctl. It accepts no pass-through arguments,
+  # only a unit from the allowlist and a keyword it resolves to a fixed command.
+  - path: /usr/local/bin/ops-journal
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # Read-only journal access for the units this node actually runs. The unit
+      # name is matched against the allowlist and the *matched literal* is what
+      # journalctl receives, so nothing the caller typed is ever passed through.
+      set -euo pipefail
+
+      ALLOWED="conduit xray xray-probe-client xray-exporter xray-user-stats probe alloy nginx ssh"
+
+      usage() {
+        echo "usage: sudo ops-journal <unit> [follow]" >&2
+        echo "units: $ALLOWED" >&2
+        exit 64
+      }
+
+      [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage
+
+      unit=""
+      for u in $ALLOWED; do
+        if [ "$u" = "$1" ]; then unit="$u"; break; fi
+      done
+      [ -n "$unit" ] || { echo "ops-journal: '$1' is not an inspectable unit" >&2; usage; }
+
+      case "$${2:-}" in
+        "")     exec /usr/bin/journalctl --no-pager -n 500 -u "$unit" ;;
+        follow) exec /usr/bin/journalctl --no-pager -n 100 -f -u "$unit" ;;
+        *)      usage ;;
+      esac
 
   # ── Conduit systemd unit ──────────────────────────────────────────────────
   - path: /etc/systemd/system/conduit.service
@@ -357,6 +395,56 @@ write_files:
       APT::Periodic::Unattended-Upgrade "1";
       APT::Periodic::AutocleanInterval "7";
 
+  # ── Ubuntu baseline ───────────────────────────────────────────────────────
+  # Sourced by the first runcmd step. POSIX sh: cloud-init runs runcmd under dash.
+  # Each piece exists because Ubuntu 26.04 broke the boot without it:
+  #   - the Rust coreutils (uutils) are the default, and these scripts were written
+  #     against GNU behaviour (sha256sum --check --strict on every pin, stat, base64);
+  #   - a kernel fix arrives as a new package, which plain `apt-get upgrade` holds back;
+  #   - nothing reboots the node into an installed kernel fix.
+  - path: /usr/local/lib/viaduct/os-baseline.sh
+    owner: root:root
+    permissions: "0644"
+    content: |
+      # Every apt call waits for the dpkg lock: apt-daily and unattended-upgrades hold it at boot.
+      osb_apt() {
+        DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 -y -q "$@"
+      }
+
+      # Swap to GNU coreutils and fail if the swap did not take. apt counts
+      # coreutils-from-uutils as essential, so the removal is named and allowed;
+      # coreutils stays provided because the GNU variant lands in the same transaction.
+      osb_gnu_coreutils() {
+        dpkg-query -W -f='$${Status}' coreutils-from-gnu 2>/dev/null | grep -q 'install ok installed' \
+          || osb_apt --allow-remove-essential install coreutils-from-gnu coreutils-from-uutils- >/dev/null \
+          || return 1
+        ls --version | head -n 1 | grep -q 'GNU coreutils' && return 0
+        echo "FATAL - GNU coreutils not active (coreutils-from-gnu)" >&2
+        return 1
+      }
+
+      # Security and kernel updates. --with-new-pkgs installs new dependencies (a new
+      # kernel is linux-image-<version>) but never removes anything.
+      osb_security_upgrade() {
+        osb_apt upgrade --with-new-pkgs
+      }
+
+      # A kernel fix only takes effect after a reboot, and nothing else reboots this node.
+      # Reboot in the quiet hours when an update requires it, even with a session open.
+      osb_auto_reboot() {
+        cat > /etc/apt/apt.conf.d/52viaduct-auto-reboot <<'APTREBOOT'
+      Unattended-Upgrade::Automatic-Reboot "true";
+      Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+      Unattended-Upgrade::Automatic-Reboot-Time "03:30";
+      APTREBOOT
+      }
+
+      # In order: package lists, GNU coreutils (before anything relies on them),
+      # updates, reboot policy.
+      osb_baseline() {
+        osb_apt update && osb_gnu_coreutils && osb_security_upgrade && osb_auto_reboot
+      }
+
   # ── install-xray-exporter.sh ──────────────────────────────────────────────
   # Runs during cloud-init (runcmd). Needs bash for [[ ]] and glob comparisons,
   # so it lives here as a write_files entry (with bash shebang) rather than as
@@ -436,6 +524,13 @@ write_files:
       #!/usr/bin/env bash
       set -euo pipefail
 
+      # Everything this script writes is key material: the Reality private key, the
+      # client UUIDs and config.json, which contains both. Branch-local umasks left
+      # config.json born 0644 on every re-apply (the keypair branch is skipped once
+      # the keypair exists), so set it once here and let the later chmods narrow
+      # further where a group genuinely needs read.
+      umask 077
+
       CONFIG_DIR=/etc/xray
       CONFIG_FILE=$CONFIG_DIR/config.json
       KEYPAIR_FILE=$CONFIG_DIR/keypair.env
@@ -465,18 +560,27 @@ write_files:
 
       # ── Reality keypair ───────────────────────────────────────────────────
       if [[ ! -f "$KEYPAIR_FILE" ]]; then
-        /usr/local/bin/xray x25519 > /tmp/xray-x25519.txt 2>&1
-        PRIVATE_KEY=$(awk '/PrivateKey:/  {print $NF}' /tmp/xray-x25519.txt)
-        PUBLIC_KEY=$(awk  '/PublicKey/    {print $NF}' /tmp/xray-x25519.txt)
+        # Everything created in this branch is Reality key material. Set the umask once
+        # here so each file is created 0600, instead of being written world-readable and
+        # chmod-ed a moment later.
+        umask 077
+        # Predictable path + ambient umask meant the Reality private key was briefly
+        # readable by any local account (and the fixed name invites a pre-created
+        # symlink). mktemp under umask 077 removes both; the trap covers an early exit.
+        XKEY_TMP="$(umask 077; mktemp)"
+        trap 'rm -f "$XKEY_TMP"' RETURN EXIT
+        /usr/local/bin/xray x25519 > "$XKEY_TMP" 2>&1
+        PRIVATE_KEY=$(awk '/PrivateKey:/  {print $NF}' "$XKEY_TMP")
+        PUBLIC_KEY=$(awk  '/PublicKey/    {print $NF}' "$XKEY_TMP")
         SHORT_ID=$(openssl rand -hex 8)
-        rm -f /tmp/xray-x25519.txt
+        rm -f "$XKEY_TMP"
         if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" ]]; then
           echo "ERROR: failed to parse xray x25519 output — check format" >&2
           exit 1
         fi
         printf 'PRIVATE_KEY=%s\nPUBLIC_KEY=%s\nSHORT_ID=%s\n' \
           "$PRIVATE_KEY" "$PUBLIC_KEY" "$SHORT_ID" > "$KEYPAIR_FILE"
-        chmod 600 "$KEYPAIR_FILE"
+        chmod 600 "$KEYPAIR_FILE"   # belt and braces; the umask above governs creation
         echo "Generated new Reality keypair."
       else
         # Parse, never source. `source` executes the backup as shell, so a tampered or
@@ -589,12 +693,17 @@ write_files:
           echo "Reusing UUID for: $USERNAME"
         else
           USER_UUID=$(/usr/local/bin/xray uuid)
-          echo "$USER_UUID" > "$UUID_FILE"
-          chmod 600 "$UUID_FILE"
+          # Create at 0600 rather than fixing the mode afterwards: a redirect at the
+          # ambient umask is world-readable until the chmod lands.
+          ( umask 077; echo "$USER_UUID" > "$UUID_FILE" )
+          chmod 600 "$UUID_FILE"   # belt and braces
           echo "Generated UUID for: $USERNAME"
         fi
 
         if [[ "$USERNAME" == "probe" ]]; then
+          # /etc/xray is 0755 and this file holds a working client credential, so a
+          # redirect at the ambient umask discloses it until the chmod below lands.
+          umask 077
           cat > "$CONFIG_DIR/probe-client.json" <<PROBEJSON
       {
         "log": { "loglevel": "warning" },
@@ -787,6 +896,9 @@ write_files:
       ls -1 "$CLIENTS_DIR/"*.txt 2>/dev/null | while read -r f; do echo "  $f"; done || true
 
 runcmd:
+  # The OS baseline first, so GNU coreutils are in place before anything relies on them;
+  # a failure (FATAL on stderr) stops the boot here.
+  - . /usr/local/lib/viaduct/os-baseline.sh && osb_baseline || exit 1
   # ── System users ──────────────────────────────────────────────────────────
   - useradd --system --no-create-home --shell /usr/sbin/nologin conduit
   - useradd --system --no-create-home --shell /usr/sbin/nologin xray
@@ -797,6 +909,10 @@ runcmd:
   - mkdir -p /var/lib/conduit/data
   - chown -R conduit:conduit /var/lib/conduit
   - mkdir -p /etc/xray/clients
+  - chown root:xray /etc/xray
+  # 0755 let any local account reach probe-client.json and config.json.
+  # Both readers run as xray:xray, so the group keeps its access.
+  - chmod 0750 /etc/xray
   - chmod 700 /etc/xray/clients
   - mkdir -p /var/lib/xray-exporter
   - chown xray:xray /var/lib/xray-exporter
@@ -925,7 +1041,15 @@ runcmd:
         ssl_session_cache   shared:SSL:10m;
         ssl_session_timeout 10m;
 
+        # Finite header/body timeouts (server scope — nginx forbids these inside a location):
+        # a slow-header or slow-body client must not be able to pin a worker indefinitely.
+        # These bound each connection's idle time, not per-IP volume, so clients sharing
+        # one address behind carrier-grade NAT are unaffected.
+        client_header_timeout 15s;
+        client_body_timeout   30s;
+
         location /api {
+            send_timeout       60s;
             proxy_pass         http://127.0.0.1:10000;
             proxy_http_version 1.1;
             proxy_set_header   Host $host;

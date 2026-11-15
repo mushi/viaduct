@@ -127,8 +127,9 @@ until ssh_err=$($SSH -- true 2>&1); do
   if echo "$ssh_err" | grep -qiE 'host key|identification has changed|permission denied|authenticat'; then
     log "ERROR: SSH to ${SERVER_IP} failed for a non-transient reason — not a boot delay:"
     printf '%s\n' "$ssh_err" | sed 's/^/  | /'
-    log "  If the host key changed on a rebuild, clear it and re-apply:"
-    log "    ssh-keygen -R ${SERVER_IP} -f ${BACKUPS_DIR}/known_hosts"
+    log "  A rebuild is detected from the hcloud server id; this key changed WITHOUT"
+    log "  a new id. If that was an intended change, re-apply with"
+    log "  VIADUCT_HOST_KEY_RESET=1 (or clear the pin: ssh-keygen -R ${SERVER_IP} -f ${BACKUPS_DIR}/known_hosts)."
     exit 1
   fi
   if (( SECONDS >= BOOT_DEADLINE )); then
@@ -203,6 +204,11 @@ if [[ -d "$UUID_DIR" ]]; then
   if [[ ${#UUID_FILES[@]} -gt 0 ]]; then
     log "Uploading ${#UUID_FILES[@]} UUID file(s)..."
     for f in "${UUID_FILES[@]}"; do
+      if ! vh_is_uuid "$(cat "$f")"; then
+        log "ERROR: $f does not contain a UUID. Refusing to upload it."
+        log "       A backup carrying a planted value would otherwise survive a rebuild."
+        exit 1
+      fi
       upload "$f" "/etc/xray/clients/$(basename "$f")" "600"
     done
   else
@@ -276,7 +282,14 @@ while IFS= read -r rf <&3; do
   [[ -z "$rf" ]] && continue
   name=$(basename "$rf")
   if download "$rf" "$BACKUPS_DIR/clients/$name"; then
-    log "  Saved backups/clients/$name"
+    # The listing comes from the node, so a .uuid is untrusted until it looks like
+    # one. Discard rather than store: a bad value kept here is re-uploaded next apply.
+    if [[ "$name" == *.uuid ]] && ! vh_is_uuid "$(cat "$BACKUPS_DIR/clients/$name")"; then
+      rm -f "$BACKUPS_DIR/clients/$name"
+      log "  WARNING: $name from the node is not a UUID — discarded, not backed up."
+    else
+      log "  Saved backups/clients/$name"
+    fi
   fi
 done 3< <($SSH -- "sudo sh -c 'ls /etc/xray/clients/*.uuid /etc/xray/clients/*.txt 2>/dev/null || true'")
 

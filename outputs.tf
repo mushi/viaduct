@@ -15,7 +15,7 @@ output "conduit_status" {
 }
 
 output "conduit_logs" {
-  value = "ssh ops@${hcloud_server.conduit.ipv4_address} 'sudo journalctl -u conduit -f'"
+  value = "ssh ops@${hcloud_server.conduit.ipv4_address} 'sudo ops-journal conduit follow'"
 }
 
 output "xray_status" {
@@ -23,7 +23,7 @@ output "xray_status" {
 }
 
 output "xray_logs" {
-  value = "ssh ops@${hcloud_server.conduit.ipv4_address} 'sudo journalctl -u xray -f'"
+  value = "ssh ops@${hcloud_server.conduit.ipv4_address} 'sudo ops-journal xray follow'"
 }
 
 output "alloy_status" {
@@ -31,7 +31,7 @@ output "alloy_status" {
 }
 
 output "alloy_logs" {
-  value = "ssh ops@${hcloud_server.conduit.ipv4_address} 'sudo journalctl -u alloy -f'"
+  value = "ssh ops@${hcloud_server.conduit.ipv4_address} 'sudo ops-journal alloy follow'"
 }
 
 output "vless_client_uris" {

@@ -18,6 +18,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TPL = REPO_ROOT / "cloud-init.yaml.tpl"
+GUARDS = REPO_ROOT / "scripts" / "lib" / "provision-guards.sh"
+PROVISION = REPO_ROOT / "scripts" / "provision.sh"
 
 GOOD = "PRIVATE_KEY=aPrivateKeyValue\nPUBLIC_KEY=aPublicKeyValue\nSHORT_ID=0123456789abcdef\n"
 
@@ -141,6 +143,30 @@ class RestoredUuidTest(unittest.TestCase):
     def test_a_non_uuid_is_refused(self):
         p = self.run_with("not-a-uuid\n")
         self.assertNotEqual(p.returncode, 0, "a non-UUID was rendered into the config")
+
+
+class UuidGuardAndRoundTripTest(unittest.TestCase):
+    def guard(self, value: str):
+        return subprocess.run(
+            ["bash", "-c", f'. "{GUARDS}"\nvh_is_uuid {value!r} && echo OK || echo REJECT'],
+            capture_output=True, text=True)
+
+    def test_the_guard_discriminates(self):
+        self.assertIn("OK", self.guard("11111111-2222-3333-4444-555555555555").stdout)
+        for bad in ("", "not-a-uuid", '1111"; rm -rf /', "11111111-2222-3333-4444"):
+            with self.subTest(value=bad):
+                self.assertIn("REJECT", self.guard(bad).stdout, f"vh_is_uuid accepted {bad!r}")
+
+    def test_both_ends_of_the_round_trip_call_it(self):
+        """The provisioner validates the UUID both when it pushes a backup up and when it
+        stores what the node hands back — a planted value must not survive either leg."""
+        body = uncommented(PROVISION.read_text())
+        upload_side = body[body.index("Uploading"): body.index('upload "$f"')]
+        self.assertIn("vh_is_uuid", upload_side,
+                      "a planted UUID is still pushed back to the node unvalidated")
+        download_side = body[body.index('download "$rf"'): body.index("Provisioning complete")]
+        self.assertIn("vh_is_uuid", download_side,
+                      "what the node hands back is still stored unvalidated")
 
 
 if __name__ == "__main__":

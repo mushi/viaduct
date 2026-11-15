@@ -35,15 +35,15 @@ cloudflare_api_token = "your-cloudflare-api-token-here"
 # ── Optional overrides ────────────────────────────────────────────────────────
 
 # location            = "nbg1"              # nbg1 fsn1 hel1 ash sin
-# conduit_version     = "release-cli-2.0.0"
+# conduit_version     = "release-cli-2.1.0"
 # conduit_bandwidth   = 40
 # conduit_max_clients = 100
 # conduit_cpu_quota   = "60%"
-# xray_version        = "v26.4.25"
-# xray_exporter_version = "v0.2.0"
+# xray_version        = "v26.11.9"
+# xray_exporter_version = "v0.6.9"
 # vless_sni           = "microsoft.com"
 # vless_domain        = "example.com"        # domain for XHTTP TLS cert + XHTTP URI; A record must be DNS-only (unproxied)
-# alloy_version       = "v1.8.3"
+# alloy_version       = "v1.21.3"
 
 # ── Binary checksums (required) ───────────────────────────────────────────────
 # Run: ./scripts/get-checksums.sh

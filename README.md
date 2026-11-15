@@ -167,7 +167,9 @@ cloud-init runs fresh. The provisioner uploads:
 - `backups/keypair.env` — preserves Reality keypair (users keep their client configs)
 - `backups/clients/*.uuid` — preserves UUIDs
 
-> **Important:** `backups/keypair.env` must have all three fields populated (`PRIVATE_KEY`, `PUBLIC_KEY`, `SHORT_ID`) before a rebuild. If any are blank, xray-setup.sh will abort with an error. Verify with `cat backups/keypair.env` before running `terraform apply`.
+> **Important:** `backups/keypair.env` must have all three fields populated (`PRIVATE_KEY`, `PUBLIC_KEY`, `SHORT_ID`) before a rebuild. If any are blank, xray-setup.sh will abort with an error. Verify with `cat backups/keypair.env` before running `terraform apply`. Restored `.uuid` files must each hold a UUID; anything else stops the provisioner (and on the node, xray-setup.sh) rather than being rendered into client configs.
+
+The SSH host-key pin in `backups/known_hosts` is cleared only when the hcloud server id differs from the one recorded in `backups/known_hosts.serverid` at the last successful provision, which a rebuild always does. A host-key change without a new server id fails closed. If you caused it (an OS reinstall, or the first apply before any id is recorded), re-apply with `VIADUCT_HOST_KEY_RESET=1 terraform apply`.
 
 ## Metrics architecture
 
@@ -245,9 +247,9 @@ Interactive admin is the `ops` account (scoped sudo: service lifecycle + logs); 
 ssh ops@<ip> 'sudo systemctl status conduit xray xray-exporter xray-user-stats alloy nginx probe xray-probe-client'
 
 # Logs
-ssh ops@<ip> 'sudo journalctl -u conduit -f'
-ssh ops@<ip> 'sudo journalctl -u xray -f'
-ssh ops@<ip> 'sudo journalctl -u alloy -f'
+ssh ops@<ip> 'sudo ops-journal conduit follow'
+ssh ops@<ip> 'sudo ops-journal xray follow'
+ssh ops@<ip> 'sudo ops-journal alloy follow'
 
 # Check metrics endpoints (from the server)
 ssh ops@<ip> 'curl -s http://127.0.0.1:9090/metrics | head -20'   # Conduit
@@ -269,35 +271,6 @@ terraform apply -replace=null_resource.provision
 
 Change the relevant `*_version` variable in `terraform.tfvars`. Then run `scripts/get-checksums.sh` and paste the new checksums into `terraform.tfvars`.
 Then SSH in and update manually (cloud-init only runs on first boot), or destroy and recreate. On recreate, backups restore everything automatically.
-
-## Optional: KhajuBridge (Iran traffic prioritisation)
-
-[KhajuBridge](https://github.com/delejos/conduit-iran-khajubridge) is an optional nftables layer that restricts Conduit's UDP traffic to Iranian IP ranges, biasing the Psiphon broker toward routing Iranian clients to your instance. It does not affect Xray/VLESS or SSH.
-
-```sh
-cd /opt
-git clone https://github.com/delejos/conduit-iran-khajubridge khajubridge
-cd khajubridge
-chmod +x scripts/*.sh install.sh
-sudo bash install.sh
-sudo /opt/khajubridge/scripts/update_region_cidrs.sh
-sudo sed -i '/^define IRAN_UDP_RATE/d' /opt/khajubridge/nftables/conduit-region.nft
-sudo sed -i \
-  's/limit rate \$IRAN_UDP_RATE burst \$IRAN_UDP_BURST packets/limit rate 100000\/second burst 200000 packets/g' \
-  /opt/khajubridge/nftables/conduit-region.nft
-sudo /opt/khajubridge/scripts/apply_firewall.sh
-sudo cp /opt/khajubridge/systemd/khajubridge-cidr-refresh.service /etc/systemd/system/
-sudo cp /opt/khajubridge/systemd/khajubridge-cidr-refresh.timer   /etc/systemd/system/
-sudo cp -r /opt/khajubridge/systemd/conduit.service.d             /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now khajubridge-cidr-refresh.timer
-```
-
-The two `sed` commands work around a syntax error in the nftables template (rate expressions are not valid in `define` statements on Ubuntu 24.04's nftables).
-
-To remove: `sudo nft delete table inet khajubridge && sudo systemctl disable --now khajubridge-cidr-refresh.timer`
-
-Note: KhajuBridge is not managed by Terraform and must be reapplied manually after a server rebuild.
 
 ## Security notes
 

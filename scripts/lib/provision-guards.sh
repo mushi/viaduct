@@ -58,3 +58,13 @@ vh_record_server_id() {
     [ -n "$server_id" ] && [ -n "$serverid_file" ] || return 0
     printf '%s\n' "$server_id" > "$serverid_file"
 }
+
+# vh_is_uuid <value>
+#
+# A client UUID round-trips through backups/: it comes off the node, is kept locally,
+# and is uploaded again on the next apply, where it is rendered into config.json and
+# every client URI. Shape-check it at both ends so a planted value cannot survive a
+# rebuild.
+vh_is_uuid() {
+    [[ "${1:-}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
+}

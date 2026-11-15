@@ -1,0 +1,140 @@
+"""The ops account reaches journalctl only through a fixed-argument wrapper.
+
+The ops account is inspect-only by intent. A sudo wildcard matches the entire remaining
+argument string, so `/usr/bin/journalctl *` also grants `journalctl --vacuum-time=1s`,
+which deletes the audit record, and no narrowing of the pattern can exclude one
+trailing word. Sudo is granted on a root-owned wrapper that takes fixed arguments.
+
+The wrapper is extracted from cloud-init.yaml.tpl and executed against a stubbed
+`journalctl`, so what is asserted is the command actually issued — not the presence
+of a validation line.
+"""
+
+import os
+import re
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+TPL = REPO_ROOT / "cloud-init.yaml.tpl"
+
+
+def render(body: str) -> str:
+    """Undo Terraform template escaping, as templatefile() does at apply time."""
+    return body.replace("$${", "${").replace("%%{", "%{")
+
+
+def write_file_content(path: str) -> str:
+    """The rendered body of the write_files entry for `path`."""
+    body = render(TPL.read_text())
+    entry = body.index(f"- path: {path}\n")
+    marker = body.index("content: |\n", entry) + len("content: |\n")
+    tail = body[marker:]
+
+    lines = tail.splitlines()
+    indent = len(lines[0]) - len(lines[0].lstrip())
+    out = []
+    for line in lines:
+        if line.strip() and (len(line) - len(line.lstrip())) < indent:
+            break
+        out.append(line[indent:])
+    return "\n".join(out).rstrip() + "\n"
+
+
+class WrapperHarness(unittest.TestCase):
+    """Installs a wrapper plus stub journalctl/wg, and records what got invoked."""
+
+    wrapper_path = None
+
+    def run_wrapper(self, *args):
+        tmp = tempfile.mkdtemp()
+        binp = Path(tmp) / "bin"
+        binp.mkdir()
+        log = Path(tmp) / "invoked.log"
+
+        for stub in ("journalctl",):
+            (binp / stub).write_text(
+                f'#!/usr/bin/env bash\nprintf "{stub} %s\\n" "$*" >> "{log}"\nexit 0\n')
+
+        script = binp / Path(self.wrapper_path).name
+        script.write_text(
+            write_file_content(self.wrapper_path).replace("/usr/bin/", f"{binp}/"))
+        for f in binp.iterdir():
+            f.chmod(0o755)
+
+        p = subprocess.run([str(script), *args], capture_output=True, text=True,
+                           env=dict(os.environ, PATH=f"{binp}:{os.environ['PATH']}"),
+                           timeout=30, stdin=subprocess.DEVNULL)
+        p.invoked = log.read_text().splitlines() if log.exists() else []
+        return p
+
+
+class OpsJournalTest(WrapperHarness):
+    wrapper_path = "/usr/local/bin/ops-journal"
+
+    def test_an_allowed_unit_is_readable(self):
+        """Anchor: without this the rejection assertions below pass vacuously."""
+        p = self.run_wrapper("conduit")
+        self.assertEqual(p.returncode, 0, f"reading an allowed unit failed: {p.stderr}")
+        self.assertTrue(
+            any("-u conduit" in c for c in p.invoked),
+            f"journalctl was not run against the requested unit: {p.invoked}")
+
+    def test_vacuum_cannot_be_smuggled_in_as_a_second_argument(self):
+        """The filed capability: destroying the audit record."""
+        p = self.run_wrapper("conduit", "--vacuum-time=1s")
+        self.assertNotEqual(p.returncode, 0, "the wrapper accepted --vacuum-time")
+        self.assertEqual(
+            p.invoked, [],
+            f"journalctl was invoked despite the rejection: {p.invoked}")
+
+    def test_vacuum_alone_is_rejected(self):
+        p = self.run_wrapper("--vacuum-time=1s")
+        self.assertNotEqual(p.returncode, 0, "the wrapper accepted --vacuum-time")
+        self.assertEqual(p.invoked, [], f"journalctl was invoked: {p.invoked}")
+
+    def test_an_unlisted_unit_is_rejected(self):
+        p = self.run_wrapper("some-other-unit")
+        self.assertNotEqual(p.returncode, 0, "an unlisted unit was accepted")
+        self.assertEqual(p.invoked, [], f"journalctl was invoked: {p.invoked}")
+
+    def test_the_allowlist_literal_is_passed_not_the_callers_string(self):
+        """A partial match must not let extra text ride along into journalctl."""
+        p = self.run_wrapper("conduit --vacuum-files")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertEqual(p.invoked, [], f"journalctl was invoked: {p.invoked}")
+
+
+class OpsSudoersTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        body = TPL.read_text()
+        ops = body.index("- name: ops")
+        block = body[ops: body.index("\nwrite_files:", ops)]
+        cls.rule = next(l for l in block.splitlines() if l.strip().startswith("sudo:"))
+
+    def test_journalctl_is_not_reachable_directly(self):
+        self.assertNotIn(
+            "/usr/bin/journalctl", self.rule,
+            "ops can still sudo journalctl directly, so --vacuum-* is still reachable")
+
+    def test_the_wrappers_are_granted(self):
+        """Anchor: the negative assertions above would also pass on an empty rule."""
+        for wrapper in ("/usr/local/bin/ops-journal",):
+            self.assertIn(wrapper, self.rule, f"{wrapper} is not sudo-able by ops")
+
+    def test_wrappers_are_root_owned_and_not_writable_by_ops(self):
+        body = TPL.read_text()
+        for wrapper in ("/usr/local/bin/ops-journal",):
+            entry = body[body.index(f"- path: {wrapper}\n"):]
+            entry = entry[: entry.index("content: |")]
+            self.assertIn("owner: root:root", entry, f"{wrapper} is not root-owned")
+            self.assertRegex(
+                entry, r'permissions: "0755"',
+                f"{wrapper} is not 0755; an ops-writable wrapper defeats the whole fix")
+
+
+if __name__ == "__main__":
+    unittest.main()

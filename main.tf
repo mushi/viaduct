@@ -6,6 +6,10 @@ terraform {
       source  = "hetznercloud/hcloud"
       version = "~> 1.49"
     }
+    cloudinit = {
+      source  = "hashicorp/cloudinit"
+      version = "~> 2.3"
+    }
     local = {
       source  = "hashicorp/local"
       version = "~> 2.5"
@@ -91,41 +95,58 @@ resource "hcloud_firewall" "conduit" {
   }
 }
 
+# ── cloud-init (gzip-compressed) ──────────────────────────────────────────────
+# The rendered cloud-config exceeds Hetzner's 32 KiB user_data limit, so it is
+# gzipped. Hetzner only accepts UTF-8 user_data, so gzip must be base64-wrapped
+# (the cloudinit provider forces base64_encode=true whenever gzip=true). The box
+# base64-decodes and gunzips it automatically at first boot.
+#
+# vless_users is intentionally NOT in user_data. It is managed via users.txt
+# uploaded by the provisioner, so that adding or removing users never forces a
+# server rebuild.
+
+data "cloudinit_config" "conduit" {
+  gzip          = true
+  base64_encode = true
+
+  part {
+    content_type = "text/cloud-config"
+    content = templatefile("${path.module}/cloud-init.yaml.tpl", {
+      conduit_version       = var.conduit_version
+      conduit_bandwidth     = var.conduit_bandwidth
+      conduit_max_clients   = var.conduit_max_clients
+      conduit_cpu_quota     = var.conduit_cpu_quota
+      conduit_sha256        = var.conduit_sha256
+      xray_version          = var.xray_version
+      xray_zip_sha256       = var.xray_zip_sha256
+      vless_sni             = var.vless_sni
+      vless_domain          = var.vless_domain
+      cloudflare_api_token  = var.cloudflare_api_token
+      xray_exporter_version = var.xray_exporter_version
+      xray_exporter_sha256  = var.xray_exporter_sha256
+      alloy_version         = var.alloy_version
+      alloy_zip_sha256      = var.alloy_zip_sha256
+      geoip_version         = var.geoip_version
+      geoip_sha256          = var.geoip_sha256
+      geosite_version       = var.geosite_version
+      geosite_sha256        = var.geosite_sha256
+      ssh_public_key        = var.ssh_public_key
+      ops_ssh_public_key    = var.ops_ssh_public_key
+    })
+  }
+}
+
 # ── Server ────────────────────────────────────────────────────────────────────
 
 resource "hcloud_server" "conduit" {
   name         = "conduit-station"
   server_type  = "cx23"
-  image        = "ubuntu-24.04"
+  image        = "ubuntu-26.04"
   location     = var.location
   ssh_keys     = [hcloud_ssh_key.conduit.id]
   firewall_ids = [hcloud_firewall.conduit.id]
 
-  # vless_users is intentionally NOT in user_data.
-  # It is managed via users.txt uploaded by the provisioner, so that adding
-  # or removing users never forces a server rebuild.
-  user_data = templatefile("${path.module}/cloud-init.yaml.tpl", {
-    conduit_version       = var.conduit_version
-    conduit_bandwidth     = var.conduit_bandwidth
-    conduit_max_clients   = var.conduit_max_clients
-    conduit_cpu_quota     = var.conduit_cpu_quota
-    conduit_sha256        = var.conduit_sha256
-    xray_version          = var.xray_version
-    xray_zip_sha256       = var.xray_zip_sha256
-    vless_sni             = var.vless_sni
-    vless_domain          = var.vless_domain
-    cloudflare_api_token  = var.cloudflare_api_token
-    xray_exporter_version = var.xray_exporter_version
-    xray_exporter_sha256  = var.xray_exporter_sha256
-    alloy_version         = var.alloy_version
-    alloy_zip_sha256      = var.alloy_zip_sha256
-    geoip_version         = var.geoip_version
-    geoip_sha256          = var.geoip_sha256
-    geosite_version       = var.geosite_version
-    geosite_sha256        = var.geosite_sha256
-    ssh_public_key        = var.ssh_public_key
-    ops_ssh_public_key    = var.ops_ssh_public_key
-  })
+  user_data = data.cloudinit_config.conduit.rendered
 
   labels = { role = "conduit-station" }
 }
