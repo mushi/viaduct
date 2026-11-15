@@ -169,6 +169,8 @@ cloud-init runs fresh. The provisioner uploads:
 
 > **Important:** `backups/keypair.env` must have all three fields populated (`PRIVATE_KEY`, `PUBLIC_KEY`, `SHORT_ID`) before a rebuild. If any are blank, xray-setup.sh will abort with an error. Verify with `cat backups/keypair.env` before running `terraform apply`. Restored `.uuid` files must each hold a UUID; anything else stops the provisioner (and on the node, xray-setup.sh) rather than being rendered into client configs.
 
+The provisioner talks to the server over one SSH connection for the whole run, so a router's intrusion prevention sees a single session, not a burst. While the box boots it backs off (15s, 30s, then every 60s, up to 10 min); if the connection drops mid-run it reconnects and retries. On a new server it also reboots once if a kernel update is installed but not yet running; routine applies leave that to the 03:30 window.
+
 The SSH host-key pin in `backups/known_hosts` is cleared only when the hcloud server id differs from the one recorded in `backups/known_hosts.serverid` at the last successful provision, which a rebuild always does. A host-key change without a new server id fails closed. If you caused it (an OS reinstall, or the first apply before any id is recorded), re-apply with `VIADUCT_HOST_KEY_RESET=1 terraform apply`.
 
 ## Metrics architecture
