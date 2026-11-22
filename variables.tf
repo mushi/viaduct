@@ -32,12 +32,6 @@ variable "location" {
 
 # ── Conduit ───────────────────────────────────────────────────────────────────
 
-variable "conduit_version" {
-  description = "Conduit CLI release tag. Check https://github.com/Psiphon-Inc/conduit/releases for the latest."
-  type        = string
-  default     = "release-cli-2.1.0"
-}
-
 variable "conduit_bandwidth" {
   description = "Per-peer bandwidth cap in Mbps (--bandwidth flag). 40 Mbps leaves headroom for many concurrent peers on a CX23."
   type        = number
@@ -58,12 +52,6 @@ variable "conduit_cpu_quota" {
 
 # ── Xray ─────────────────────────────────────────────────────────────────────
 
-variable "xray_version" {
-  description = "Xray-core release tag. Check https://github.com/XTLS/Xray-core/releases for the latest."
-  type        = string
-  default     = "v26.11.9"
-}
-
 variable "vless_sni" {
   description = "Domain that Reality impersonates (SNI). Must support TLS 1.3. microsoft.com is a widely-recommended default."
   type        = string
@@ -71,8 +59,14 @@ variable "vless_sni" {
 }
 
 variable "vless_domain" {
-  description = "Public domain name proxied through Cloudflare (e.g. example.com). Used for the VLESS+WebSocket+TLS inbound that Iranian users connect to. Must be pointed at this server via a proxied Cloudflare DNS A record."
+  description = "Public domain name for the VLESS+XHTTP+TLS inbound on port 8443 (e.g. example.com). Must be a DNS-only (grey cloud) Cloudflare A record pointing at this server; the zone's DNS is also used for the certbot DNS-01 challenge."
   type        = string
+
+  # The provisioner passes it to certbot on a remote command line.
+  validation {
+    condition     = can(regex("^(?i)([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,63}$", var.vless_domain))
+    error_message = "vless_domain must be a plain hostname such as example.com."
+  }
 }
 
 variable "vless_users" {
@@ -91,24 +85,7 @@ variable "vless_users" {
   }
 }
 
-variable "xray_exporter_version" {
-  description = "xray-exporter release tag (compassvpn fork). Check https://github.com/compassvpn/xray-exporter/releases."
-  type        = string
-  default     = "v0.6.9"
-}
-
-variable "xray_exporter_sha256" {
-  description = "SHA-256 of xray-exporter-linux-amd64 for the pinned xray_exporter_version. This release publishes no checksums file, so it is pinned here. Run scripts/get-checksums.sh to obtain."
-  type        = string
-}
-
 # ── Grafana / Alloy ───────────────────────────────────────────────────────────
-
-variable "alloy_version" {
-  description = "Grafana Alloy release tag. Check https://github.com/grafana/alloy/releases for the latest."
-  type        = string
-  default     = "v1.21.3"
-}
 
 variable "grafana_cloud_prometheus_url" {
   description = "Grafana Cloud Prometheus remote-write endpoint. Find it at grafana.com → your stack → Prometheus → Details. Format: https://prometheus-xxx.grafana.net/api/prom/push"
@@ -132,58 +109,10 @@ variable "cloudflare_api_token" {
   description = "Cloudflare API token for certbot DNS-01 challenge. Create at dash.cloudflare.com → My Profile → API Tokens with Zone:DNS:Edit permission for the vless_domain zone."
   type        = string
   sensitive   = true
-}
 
-# ── Binary checksums ──────────────────────────────────────────────────────────
-# SHA-256 of each downloaded file, pinned per version.
-# These must be updated whenever a *_version variable changes.
-# Run scripts/get-checksums.sh to fetch the correct values for any version.
-#
-# Checksums pinned here are out-of-band from the download. This is trust-on-first-use:
-# it catches a release or CDN compromised AFTER you ran get-checksums.sh (cloud-init
-# aborts on mismatch), and get-checksums.sh cross-checks Xray/Grafana against their
-# own signed digest files (.dgst / SHA256SUMS). It does NOT catch a release that was
-# already malicious when pinned — that needs upstream provenance (SLSA / cosign).
-
-variable "conduit_sha256" {
-  description = "SHA-256 of conduit-linux-amd64 for the pinned conduit_version. Run scripts/get-checksums.sh to obtain."
-  type        = string
-}
-
-variable "xray_zip_sha256" {
-  description = "SHA-256 of Xray-linux-64.zip for the pinned xray_version. Run scripts/get-checksums.sh to obtain."
-  type        = string
-}
-
-variable "alloy_zip_sha256" {
-  description = "SHA-256 of alloy-linux-amd64.zip for the pinned alloy_version. Run scripts/get-checksums.sh to obtain."
-  type        = string
-}
-
-# Xray geo data (geoip.dat / geosite.dat). Pinned to a release TAG and verified on
-# the node against the digest recorded here — NOT a .sha256sum fetched from the same
-# release path, which proves transport integrity only. Defaults are a known-good pair;
-# run scripts/get-checksums.sh after bumping a *_version to refresh the matching digest.
-variable "geoip_version" {
-  description = "Pinned v2fly/geoip release tag providing geoip.dat."
-  type        = string
-  default     = "202611080027"
-}
-
-variable "geoip_sha256" {
-  description = "SHA-256 of geoip.dat from the pinned v2fly/geoip release. Run scripts/get-checksums.sh to obtain."
-  type        = string
-  default     = "eedb24b3b9fcba27e06b92c0428dab90d9496083091ae4cf39e11387fd99d0e2"
-}
-
-variable "geosite_version" {
-  description = "Pinned v2fly/domain-list-community release tag providing dlc.dat (installed as geosite.dat)."
-  type        = string
-  default     = "20261110034535"
-}
-
-variable "geosite_sha256" {
-  description = "SHA-256 of dlc.dat from the pinned v2fly/domain-list-community release. Run scripts/get-checksums.sh to obtain."
-  type        = string
-  default     = "6cc4decf520dbfd96e1e3750661976eb31d2a5381090b8768cb2ab1528201fcf"
+  # Written as one line of certbot's credentials file; whitespace would split it.
+  validation {
+    condition     = can(regex("^\\S+$", var.cloudflare_api_token))
+    error_message = "cloudflare_api_token must be a single token with no spaces or line breaks."
+  }
 }

@@ -1,0 +1,37 @@
+# Dependabot keeps the GitHub Actions SHAs, the probe's Go modules and the Terraform
+# providers current. The downloaded binaries and geo data are not packages it can read;
+# they live in pins.json and the weekly pins workflow updates them.
+#
+# cooldown: a version must be public for 4 days before a PR proposes it, so a bad or
+# hijacked release has time to be noticed and pulled. Security updates skip the wait.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 4
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: "gomod"
+    directory: "/probe"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 4
+    groups:
+      go:
+        patterns: ["*"]
+
+  - package-ecosystem: "terraform"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 4
+    groups:
+      terraform-providers:
+        patterns: ["*"]

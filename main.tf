@@ -104,6 +104,10 @@ resource "hcloud_firewall" "conduit" {
 # vless_users is intentionally NOT in user_data. It is managed via users.txt
 # uploaded by the provisioner, so that adding or removing users never forces a
 # server rebuild.
+#
+# No secret is in user_data either: anything on the box can read it back from the
+# metadata service, and the hcloud API returns it to any holder of a project token.
+# Secrets are rendered into backups/ below and uploaded by the provisioner.
 
 data "cloudinit_config" "conduit" {
   gzip          = true
@@ -112,24 +116,23 @@ data "cloudinit_config" "conduit" {
   part {
     content_type = "text/cloud-config"
     content = templatefile("${path.module}/cloud-init.yaml.tpl", {
-      conduit_version       = var.conduit_version
+      conduit_version       = local.pins.conduit.version
       conduit_bandwidth     = var.conduit_bandwidth
       conduit_max_clients   = var.conduit_max_clients
       conduit_cpu_quota     = var.conduit_cpu_quota
-      conduit_sha256        = var.conduit_sha256
-      xray_version          = var.xray_version
-      xray_zip_sha256       = var.xray_zip_sha256
+      conduit_sha256        = local.pins.conduit.sha256["conduit-linux-amd64"]
+      xray_version          = local.pins.xray.version
+      xray_zip_sha256       = local.pins.xray.sha256["Xray-linux-64.zip"]
       vless_sni             = var.vless_sni
       vless_domain          = var.vless_domain
-      cloudflare_api_token  = var.cloudflare_api_token
-      xray_exporter_version = var.xray_exporter_version
-      xray_exporter_sha256  = var.xray_exporter_sha256
-      alloy_version         = var.alloy_version
-      alloy_zip_sha256      = var.alloy_zip_sha256
-      geoip_version         = var.geoip_version
-      geoip_sha256          = var.geoip_sha256
-      geosite_version       = var.geosite_version
-      geosite_sha256        = var.geosite_sha256
+      xray_exporter_version = local.pins.xray_exporter.version
+      xray_exporter_sha256  = local.pins.xray_exporter.sha256["xray-exporter-linux-amd64"]
+      alloy_version         = local.pins.alloy.version
+      alloy_zip_sha256      = local.pins.alloy.sha256["alloy-linux-amd64.zip"]
+      geoip_version         = local.pins.geoip.version
+      geoip_sha256          = local.pins.geoip.sha256["geoip.dat"]
+      geosite_version       = local.pins.geosite.version
+      geosite_sha256        = local.pins.geosite.sha256["dlc.dat"]
       ssh_public_key        = var.ssh_public_key
       ops_ssh_public_key    = var.ops_ssh_public_key
     })
@@ -176,16 +179,28 @@ resource "local_file" "alloy_config" {
   })
 }
 
+# ── cloudflare-certbot.ini (local file, uploaded by provisioner) ──────────────
+# certbot's DNS-01 credentials: the first certificate (provision.sh) and every
+# renewal (certbot timer on the box) read the uploaded copy.
+
+resource "local_sensitive_file" "cloudflare_ini" {
+  filename        = "${path.module}/backups/cloudflare-certbot.ini"
+  file_permission = "0600"
+  content         = "dns_cloudflare_api_token = ${var.cloudflare_api_token}\n"
+}
+
 # ── Provisioner ───────────────────────────────────────────────────────────────
 # Runs on every apply where a trigger value changes:
 #   server_id    — always re-runs after a server rebuild
 #   users_hash   — re-runs when vless_users changes
 #   alloy_hash   — re-runs when Grafana Cloud credentials change
+#   cloudflare_hash — re-runs when the Cloudflare API token changes
 #
 # The script (scripts/provision.sh):
 #   1. Waits for cloud-init to signal completion
 #   2. Uploads backup files (conduit_key.json, keypair.env, *.uuid)
-#   3. Uploads users.txt and alloy-config.alloy
+#   3. Uploads users.txt, alloy-config.alloy and cloudflare-certbot.ini, and
+#      obtains the TLS certificate if the box has none
 #   4. Runs xray-setup.sh --regen
 #   5. Installs the Alloy config and restarts Alloy
 #   6. Starts / restarts conduit and xray
@@ -196,6 +211,9 @@ resource "null_resource" "provision" {
     server_id  = hcloud_server.conduit.id
     users_hash = sha256(local_file.users_txt.content)
     alloy_hash = sha256(local_file.alloy_config.content)
+    # The resource's digest attribute: sha256(content) would be sensitive and hide
+    # which trigger changed in the plan.
+    cloudflare_hash = local_sensitive_file.cloudflare_ini.content_sha256
     # Re-provision (rebuild + redeploy the probe) when any file under probe/
     # changes. Covers *.go, go.mod, go.sum; also README, so a docs-only edit
     # triggers a (harmless) re-provision. Narrow the glob to "**/*.go" plus
@@ -213,6 +231,8 @@ resource "null_resource" "provision" {
       BACKUPS_DIR  = "${path.module}/backups"
       USERS_FILE   = local_file.users_txt.filename
       ALLOY_CONFIG = local_file.alloy_config.filename
+      CF_INI       = local_sensitive_file.cloudflare_ini.filename
+      VLESS_DOMAIN = var.vless_domain
       PROBE_SRC    = "${path.module}/probe"
     }
   }

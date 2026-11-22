@@ -9,6 +9,8 @@
 #   BACKUPS_DIR  — local path to the backups/ directory
 #   USERS_FILE   — local path to the generated users.txt
 #   ALLOY_CONFIG — local path to the rendered alloy-config.alloy
+#   CF_INI       — local path to the rendered cloudflare-certbot.ini
+#   VLESS_DOMAIN — the domain the TLS certificate is issued for
 #
 # Every SSH and SCP operation shares one connection, opened once per run (see
 # "One SSH connection per run" below).
@@ -20,6 +22,8 @@ set -euo pipefail
 : "${BACKUPS_DIR:?}"
 : "${USERS_FILE:?}"
 : "${ALLOY_CONFIG:?}"
+: "${CF_INI:?}"
+: "${VLESS_DOMAIN:?}"
 : "${PROBE_SRC:?}"
 
 # Expand ~ in SSH_KEY_PATH (Terraform passes it literally if set in tfvars)
@@ -282,6 +286,21 @@ log "User list: $(tr '\n' ' ' < "$USERS_FILE")"
 
 upload "$ALLOY_CONFIG" "/etc/alloy/config.alloy" "640"
 remote chown root:alloy /etc/alloy/config.alloy
+
+# ── 6b. Cloudflare credentials and the TLS certificate ────────────────────────
+# The token arrives here rather than in user_data. certbot's renewal timer reads the
+# same file, so it stays on the box (root, 0600). The first certificate is issued
+# once; on a box that already has one, certbot is not run.
+
+upload "$CF_INI" "/etc/cloudflare-certbot.ini" "600"
+if ! remote test -d "/etc/letsencrypt/live/${VLESS_DOMAIN}"; then
+  log "Obtaining the TLS certificate for ${VLESS_DOMAIN} (DNS-01)..."
+  remote certbot certonly --dns-cloudflare \
+    --dns-cloudflare-credentials /etc/cloudflare-certbot.ini \
+    -d "${VLESS_DOMAIN}" --non-interactive --agree-tos \
+    --register-unsafely-without-email --dns-cloudflare-propagation-seconds 30
+fi
+remote nginx -t
 
 # ── 7. Run xray-setup.sh --regen ─────────────────────────────────────────────
 

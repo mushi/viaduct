@@ -1,153 +1,113 @@
 #!/usr/bin/env bash
 # scripts/get-checksums.sh
 #
-# Prints the SHA-256 pins for each pinned binary, ready to paste into
-# terraform.tfvars. Run this whenever you change a *_version variable.
+# Re-derives every digest in pins.json from upstream for the versions pinned there and
+# reports any that differ. With --write it records the new digests in pins.json, ready
+# to review as a diff. Change a version by editing pins.json (or scripts/update-pins.sh),
+# then run this with --write.
 #
-# Source: the GitHub Releases API (assets[].digest) — the binaries are NOT
-# downloaded or hashed locally. GitHub doesn't compute a digest for every asset
-# (older uploads return null; alloy is currently one), so for those we fall back
-# to the project's own published checksum file (e.g. Grafana's SHA256SUMS).
+# Source per asset, first that answers: the GitHub Releases API (assets[].digest); the
+# release's own SHA256SUMS file; otherwise the asset is downloaded and hashed here.
 #
-# NOTE on trust: neither the API digest nor an upstream sums file is a
-# supply-chain guarantee — both come from the same source as the artifact. The
-# protection is the RECORDED pin in terraform.tfvars: it's a point-in-time value
-# that cloud-init enforces at deploy and that no longer moves if upstream
-# changes. This script just makes that pin convenient to (re)generate.
+# NOTE on trust: neither the API digest nor an upstream sums file is a supply-chain
+# guarantee; both come from the same source as the artifact. The protection is the
+# RECORDED pin in pins.json: a point-in-time value cloud-init enforces at boot that no
+# longer moves if upstream changes. A digest that changes for an already-pinned version
+# means upstream replaced a published file; find out why before recording it.
 #
 # Usage:
-#   ./scripts/get-checksums.sh [path/to/terraform.tfvars]
+#   ./scripts/get-checksums.sh            # verify; exit 1 if any pin differs or is unreadable
+#   ./scripts/get-checksums.sh --write    # also record the new digests in pins.json
 #
-# Requirements: curl, jq.  Optional: GITHUB_TOKEN (raises the API rate limit).
+# Requirements: curl, jq. Optional: GITHUB_TOKEN (raises the API rate limit).
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-TFVARS="${1:-${SCRIPT_DIR}/../terraform.tfvars}"
-DEFAULTS_FILE="${SCRIPT_DIR}/../variables.tf"
+PINS="${PINS_FILE:-${SCRIPT_DIR}/../pins.json}"
+WRITE=0
+[ "${1:-}" = "--write" ] && WRITE=1
 
 command -v jq >/dev/null || { echo "ERROR: jq is required" >&2; exit 1; }
+[ -f "$PINS" ] || { echo "ERROR: $PINS not found" >&2; exit 1; }
 
-# ── GitHub Releases API: the sha256 digest GitHub recorded for an asset ────────
-# Echoes the bare hex (sha256: prefix stripped), or empty when GitHub has none
-# (null digest, missing asset, or a fetch error — the caller validates).
-api_digest() {
-  local repo="$1" tag="$2" asset="$3" url json
-  url="https://api.github.com/repos/$repo/releases/tags/$tag"
-  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-    json=$(curl -fsSL -H "Accept: application/vnd.github+json" \
-      -H "X-GitHub-Api-Version: 2022-11-28" \
-      -H "Authorization: Bearer $GITHUB_TOKEN" "$url") || return 0
-  else
-    json=$(curl -fsSL -H "Accept: application/vnd.github+json" \
-      -H "X-GitHub-Api-Version: 2022-11-28" "$url") || return 0
-  fi
-  printf '%s' "$json" \
-    | jq -r --arg n "$asset" '.assets[] | select(.name==$n) | .digest // empty' \
-    | sed 's/^sha256://'
+RATE_FLAG=$(mktemp); trap 'rm -f "$RATE_FLAG"' EXIT; rm -f "$RATE_FLAG"
+
+gh_api() {  # path -> body, or empty on error
+  local auth=()
+  [ -n "${GITHUB_TOKEN:-}" ] && auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
+  curl -sSL -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+    ${auth[@]+"${auth[@]}"} "https://api.github.com/$1" 2>/dev/null || true
 }
 
-# ── Read a variable value from tfvars or variables.tf ────────────────────────
-# Uses awk instead of sed to avoid BSD/GNU sed incompatibilities.
-# Matches:   varname = "value"   (with any surrounding whitespace)
-
-get_var() {
-  local name="$1" default="$2" val=""
-
-  # Try terraform.tfvars first
-  if [[ -f "$TFVARS" ]]; then
-    # The value between the first pair of double quotes. POSIX awk (split, not
-    # gawk's 3-argument match), so it also works with macOS's awk.
-    val=$(awk -v key="$name" '
-      $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
-        if (split($0, q, "\"") >= 3 && q[2] != "") { print q[2]; exit }
-      }
-    ' "$TFVARS" 2>/dev/null || true)
-    [[ -n "$val" ]] && { echo "$val"; return; }
-  fi
-
-  # Fall back to default = "..." in variables.tf
-  if [[ -f "$DEFAULTS_FILE" ]]; then
-    val=$(awk -v key="$name" '
-      /variable[[:space:]]+"/ && $0 ~ "\"" key "\"" { found=1 }
-      found && /default[[:space:]]*=/ {
-        if (split($0, q, "\"") >= 3 && q[2] != "") { print q[2]; exit }
-      }
-      found && /^}/ { found=0 }
-    ' "$DEFAULTS_FILE" 2>/dev/null || true)
-    [[ -n "$val" ]] && { echo "$val"; return; }
-  fi
-
-  echo "$default"
+# sha256sum on Linux, shasum on macOS: this runs on operator laptops too.
+sha256_stdin() {
+  if command -v sha256sum >/dev/null; then sha256sum | awk '{print $1}'
+  else shasum -a 256 | awk '{print $1}'; fi
 }
 
-CONDUIT_VERSION=$(get_var "conduit_version"            "release-cli-2.1.0")
-XRAY_VERSION=$(get_var "xray_version"                  "v26.11.9")
-ALLOY_VERSION=$(get_var "alloy_version"                "v1.21.3")
-XRAY_EXPORTER_VERSION=$(get_var "xray_exporter_version" "v0.6.9")
-GEOIP_VERSION=$(get_var "geoip_version"                "202611080027")
-GEOSITE_VERSION=$(get_var "geosite_version"            "20261110034535")
+upstream_digest() {  # repo tag asset -> bare hex, or empty
+  local repo="$1" tag="$2" asset="$3" body d
+  body=$(gh_api "repos/$repo/releases/tags/$tag")
+  # Unauthenticated callers get 60 requests an hour; an exhausted quota looks like a
+  # missing digest unless it is called out.
+  if printf '%s' "$body" | grep -q 'API rate limit exceeded'; then : > "$RATE_FLAG"; return 0; fi
+  d=$(printf '%s' "$body" | jq -r --arg n "$asset" \
+        '.assets[]? | select(.name==$n) | .digest // empty' 2>/dev/null | sed 's/^sha256://' || true)
+  if [ -z "$d" ]; then
+    d=$(curl -fsSL "https://github.com/$repo/releases/download/$tag/SHA256SUMS" 2>/dev/null \
+        | awk -v a="$asset" '$2 == a || $2 == "*" a {print $1; exit}' || true)
+  fi
+  if [ -z "$d" ] && printf '%s' "$body" | jq -e --arg n "$asset" '.assets[]? | select(.name==$n)' >/dev/null 2>&1; then
+    d=$(curl -fsSL "https://github.com/$repo/releases/download/$tag/$asset" 2>/dev/null | sha256_stdin || true)
+    [ "$d" = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" ] && d=""  # empty body
+  fi
+  printf '%s' "$d"
+}
 
-echo "Fetching digests from the GitHub Releases API:"
-echo "  conduit          $CONDUIT_VERSION"
-echo "  xray-core        $XRAY_VERSION"
-echo "  grafana-alloy    $ALLOY_VERSION"
-echo "  xray-exporter    $XRAY_EXPORTER_VERSION"
-echo "  geoip.dat        $GEOIP_VERSION"
-echo "  geosite (dlc)    $GEOSITE_VERSION"
+UPDATES=()
+MISSING=""
+echo "Verifying pins.json against upstream:"
+for entry in $(jq -r 'to_entries[] | select(.value | type == "object" and has("source")) | .key' "$PINS"); do
+  repo=$(jq -r --arg e "$entry" '.[$e].source' "$PINS")
+  tag=$(jq -r --arg e "$entry" '.[$e].version' "$PINS")
+  for asset in $(jq -r --arg e "$entry" '.[$e].sha256 | keys[]' "$PINS"); do
+    label="$entry $tag $asset"
+    old=$(jq -r --arg e "$entry" --arg a "$asset" '.[$e].sha256[$a]' "$PINS")
+    new=$(upstream_digest "$repo" "$tag" "$asset")
+    if [ -z "$new" ]; then
+      MISSING="$MISSING $entry/$asset"; printf '  %-58s NO UPSTREAM VALUE\n' "$label"
+    elif [ "$old" = "$new" ]; then
+      printf '  %-58s ok\n' "$label"
+    else
+      printf '  %-58s CHANGED  %.12s -> %.12s\n' "$label" "$old" "$new"
+      UPDATES+=("$entry"$'\t'"$asset"$'\t'"$new")
+    fi
+  done
+done
+
 echo ""
-
-CONDUIT_SHA256=$(api_digest "Psiphon-Inc/conduit"           "$CONDUIT_VERSION"       "conduit-linux-amd64")
-XRAY_ZIP_SHA256=$(api_digest "XTLS/Xray-core"               "$XRAY_VERSION"          "Xray-linux-64.zip")
-XRAY_EXPORTER_SHA256=$(api_digest "compassvpn/xray-exporter" "$XRAY_EXPORTER_VERSION" "xray-exporter-linux-amd64")
-
-# Alloy assets frequently have no API digest → fall back to Grafana's SHA256SUMS.
-ALLOY_ZIP_SHA256=$(api_digest "grafana/alloy" "$ALLOY_VERSION" "alloy-linux-amd64.zip")
-if [[ -z "$ALLOY_ZIP_SHA256" ]]; then
-  echo "  (alloy: no API digest — reading Grafana SHA256SUMS instead)"
-  ALLOY_ZIP_SHA256=$(curl -fsSL \
-    "https://github.com/grafana/alloy/releases/download/${ALLOY_VERSION}/SHA256SUMS" \
-    | awk '/alloy-linux-amd64\.zip/ {print $1; exit}' || true)
+if [ ${#UPDATES[@]} -gt 0 ] && [ "$WRITE" -eq 1 ]; then
+  tmp=$(mktemp "${PINS}.XXXXXX")
+  cp "$PINS" "$tmp"
+  for u in "${UPDATES[@]}"; do
+    IFS=$'\t' read -r e a d <<< "$u"
+    jq --arg e "$e" --arg a "$a" --arg d "$d" '.[$e].sha256[$a] = $d' "$tmp" > "$tmp.next" && mv "$tmp.next" "$tmp"
+  done
+  mv "$tmp" "$PINS"
+  echo "Recorded ${#UPDATES[@]} new digest(s) in pins.json. Review: git diff pins.json"
+elif [ ${#UPDATES[@]} -gt 0 ]; then
+  echo "${#UPDATES[@]} pin(s) differ from upstream. Re-run with --write to record them."
+elif [ -z "$MISSING" ]; then
+  echo "Every pin matches upstream."
 fi
-
-# geoip.dat / dlc.dat: prefer the API digest; data-file assets often lack one, so fall
-# back to downloading and hashing the file ourselves (still a point-in-time recorded pin).
-hash_release_asset() {  # repo tag asset -> bare sha256
-  curl -fsSL "https://github.com/$1/releases/download/$2/$3" 2>/dev/null \
-    | sha256sum | awk '{print $1}'
-}
-GEOIP_SHA256=$(api_digest "v2fly/geoip" "$GEOIP_VERSION" "geoip.dat")
-[[ -z "$GEOIP_SHA256" ]] && GEOIP_SHA256=$(hash_release_asset "v2fly/geoip" "$GEOIP_VERSION" "geoip.dat")
-GEOSITE_SHA256=$(api_digest "v2fly/domain-list-community" "$GEOSITE_VERSION" "dlc.dat")
-[[ -z "$GEOSITE_SHA256" ]] && GEOSITE_SHA256=$(hash_release_asset "v2fly/domain-list-community" "$GEOSITE_VERSION" "dlc.dat")
-
-# ── Fail loudly if any pin is still empty ─────────────────────────────────────
-missing=""
-[[ -z "$CONDUIT_SHA256" ]]       && missing+=" conduit"
-[[ -z "$XRAY_ZIP_SHA256" ]]      && missing+=" xray"
-[[ -z "$ALLOY_ZIP_SHA256" ]]     && missing+=" alloy"
-[[ -z "$XRAY_EXPORTER_SHA256" ]] && missing+=" xray-exporter"
-[[ -z "$GEOIP_SHA256" ]]         && missing+=" geoip"
-[[ -z "$GEOSITE_SHA256" ]]       && missing+=" geosite"
-if [[ -n "$missing" ]]; then
-  echo "ERROR: no digest found for:$missing" >&2
-  echo "  Check the version/asset name. If the asset predates GitHub-computed" >&2
-  echo "  digests and has no published checksum file, hash it manually." >&2
+if [ -n "$MISSING" ]; then
+  echo "ERROR: no upstream value for:$MISSING" >&2
+  if [ -f "$RATE_FLAG" ]; then
+    echo "  The GitHub API rate limit is exhausted (60/hour unauthenticated); export GITHUB_TOKEN or retry later." >&2
+  else
+    echo "  Check the version or asset name in pins.json." >&2
+  fi
   exit 1
 fi
-
-# ── Output ────────────────────────────────────────────────────────────────────
-
-echo ""
-echo "══════════════════════════════════════════════════════════════"
-echo " Add these lines to your terraform.tfvars:"
-echo "══════════════════════════════════════════════════════════════"
-echo ""
-echo "conduit_sha256       = \"$CONDUIT_SHA256\""
-echo "xray_zip_sha256      = \"$XRAY_ZIP_SHA256\""
-echo "alloy_zip_sha256     = \"$ALLOY_ZIP_SHA256\""
-echo "xray_exporter_sha256 = \"$XRAY_EXPORTER_SHA256\""
-echo "geoip_sha256         = \"$GEOIP_SHA256\""
-echo "geosite_sha256       = \"$GEOSITE_SHA256\""
-echo ""
-echo "══════════════════════════════════════════════════════════════"
+[ ${#UPDATES[@]} -eq 0 ] || [ "$WRITE" -eq 1 ] || exit 1

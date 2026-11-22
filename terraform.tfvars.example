@@ -35,22 +35,8 @@ cloudflare_api_token = "your-cloudflare-api-token-here"
 # ── Optional overrides ────────────────────────────────────────────────────────
 
 # location            = "nbg1"              # nbg1 fsn1 hel1 ash sin
-# conduit_version     = "release-cli-2.1.0"
 # conduit_bandwidth   = 40
 # conduit_max_clients = 100
 # conduit_cpu_quota   = "60%"
-# xray_version        = "v26.11.9"
-# xray_exporter_version = "v0.6.9"
 # vless_sni           = "microsoft.com"
 # vless_domain        = "example.com"        # domain for XHTTP TLS cert + XHTTP URI; A record must be DNS-only (unproxied)
-# alloy_version       = "v1.21.3"
-
-# ── Binary checksums (required) ───────────────────────────────────────────────
-# Run: ./scripts/get-checksums.sh
-# Paste the output here. Must be updated whenever any *_version changes above.
-# Digests come from the GitHub Releases API (or each project's published checksum
-# file where the API has none, e.g. Grafana SHA256SUMS). Recorded here, they are the pin.
-conduit_sha256       = ""   # obtain via scripts/get-checksums.sh
-xray_zip_sha256      = ""   # obtain via scripts/get-checksums.sh
-alloy_zip_sha256     = ""   # obtain via scripts/get-checksums.sh
-xray_exporter_sha256 = ""   # obtain via scripts/get-checksums.sh (no upstream checksums file — pinned here)

@@ -377,15 +377,6 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 
-  # ── Cloudflare API credentials for certbot DNS-01 challenge ─────────────
-  # Used by certbot to create a DNS TXT record proving domain ownership.
-  # Requires a Cloudflare API token with Zone:DNS:Edit permission.
-  - path: /etc/cloudflare-certbot.ini
-    owner: root:root
-    permissions: "0600"
-    content: |
-      dns_cloudflare_api_token = ${cloudflare_api_token}
-
   # ── Automatic security updates ────────────────────────────────────────────
   - path: /etc/apt/apt.conf.d/20auto-upgrades
     owner: root:root
@@ -989,6 +980,10 @@ runcmd:
   # Port 80: serves a static page (defeats active probing by DPI).
   # Port 8443: TLS proxy to xray XHTTP inbound on 127.0.0.1:10000.
   # TLS cert obtained via certbot DNS-01 challenge (no port 80 access needed).
+  # The certificate is not issued here: the Cloudflare token stays out of user_data
+  # (the metadata service and the hcloud API serve user_data back verbatim), so the
+  # provisioner installs the credentials and runs the first certbot, then checks this
+  # config with `nginx -t`. Renewals run on the box via the certbot timer.
   - mkdir -p /var/www/html
   - |
     cat > /var/www/html/index.html <<'EOF'
@@ -999,15 +994,6 @@ runcmd:
     <body><h1>Welcome</h1><p>This site is currently under maintenance. Please check back later.</p></body>
     </html>
     EOF
-  - |
-    certbot certonly \
-      --dns-cloudflare \
-      --dns-cloudflare-credentials /etc/cloudflare-certbot.ini \
-      -d ${vless_domain} \
-      --non-interactive \
-      --agree-tos \
-      --register-unsafely-without-email \
-      --dns-cloudflare-propagation-seconds 30
   - |
     cat > /etc/nginx/conf.d/site.conf <<'NGINX_CONF'
     server {
@@ -1075,7 +1061,6 @@ runcmd:
     EOF
     chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
   - rm -f /etc/nginx/sites-enabled/default
-  - nginx -t
 
   # ── Register units (do NOT start — provisioner does that) ─────────────────
   - systemctl daemon-reload

@@ -99,8 +99,8 @@ Each user gets **two client URIs** (saved to `backups/clients/<name>.txt`):
 ```sh
 cp terraform.tfvars.example terraform.tfvars
 # Fill in: hcloud_token, ssh keys (deploy + ops_ssh_public_key), vless_domain, vless_users,
-# cloudflare_api_token, grafana_cloud_* values,
-# binary versions and checksums (run scripts/get-checksums.sh)
+# cloudflare_api_token, grafana_cloud_* values.
+# Binary versions and checksums are committed in pins.json; nothing to fill in.
 
 terraform init
 terraform plan
@@ -271,8 +271,14 @@ terraform apply -replace=null_resource.provision
 
 ## Updating binaries
 
-Change the relevant `*_version` variable in `terraform.tfvars`. Then run `scripts/get-checksums.sh` and paste the new checksums into `terraform.tfvars`.
-Then SSH in and update manually (cloud-init only runs on first boot), or destroy and recreate. On recreate, backups restore everything automatically.
+Every version and SHA-256 the server downloads at boot is in `pins.json`, which Terraform reads directly.
+
+- **Automatically:** the weekly **Pins** workflow (`.github/workflows/pins.yml`) first re-checks every committed digest against upstream and fails if a project has replaced a file it already published. It then moves each version to the newest release that has been public for at least 4 days, majors included, records the new digests, runs the tests and opens (or refreshes) one PR from `automation/pins`. Dependabot does the same for the GitHub Actions, the probe's Go modules and the Terraform providers, with the same 4-day wait. One-time setup: in the repo's Settings → Actions → General, allow GitHub Actions to create pull requests.
+- **By hand:** `scripts/update-pins.sh` (or edit a `version` in `pins.json`), then `scripts/get-checksums.sh --write`, then review `git diff pins.json`. `scripts/get-checksums.sh` alone verifies the committed pins.
+
+Each PR's tests run inside the Pins workflow, because GitHub doesn't start other workflows on a PR it opened itself. Close and reopen the PR if you also want the usual Tests check.
+
+A merged pin change alters user_data, so the next `terraform apply` rebuilds the server; backups restore everything automatically.
 
 ## Security notes
 
@@ -280,7 +286,7 @@ Then SSH in and update manually (cloud-init only runs on first boot), or destroy
 - `backups/` is gitignored. Store it in a password manager vault or encrypted drive.
 - The Alloy config contains your Grafana Cloud access-policy token — treat it like a password.
 - The Reality keypair is equivalent to a TLS private key — back it up and keep it private.
-- The Cloudflare API token only needs `Zone:DNS:Edit` permission. It is used solely by certbot for DNS-01 certificate renewal and is never exposed to client traffic.
+- The Cloudflare API token only needs `Zone:DNS:Edit` permission. It is used solely by certbot for DNS-01 certificate issuance and renewal and is never exposed to client traffic. It is not in user_data: Terraform renders it to `backups/cloudflare-certbot.ini` and the provisioner installs it on the server as `/etc/cloudflare-certbot.ini` (root, 0600). To rotate it, change `cloudflare_api_token` and apply; the provisioner re-runs and replaces the file.
 - Port 80 serves a static website intentionally — this defeats active probing (DPI systems that send HTTP GET requests to suspected proxy IPs will receive a legitimate-looking response).
 - Iranian IP ranges and domains are routed to a `block` outbound in Xray (`geoip:ir`, `geosite:category-ir`), preventing the server from proxying traffic back to Iranian infrastructure. This removes a potential fingerprinting signal.
 - The Xray access log is disabled (`"access": "none"`), so the server does not record which destinations users connect to. Per-user byte totals are unaffected — they come from the Stats API, not the access log.

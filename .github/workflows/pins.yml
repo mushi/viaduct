@@ -1,0 +1,91 @@
+# Weekly check and update of pins.json (the binaries and geo data the node downloads).
+#
+#  1. Verify: every committed digest is re-derived from upstream. A mismatch means a
+#     project replaced a file it had already published; the job fails and opens no PR.
+#  2. Update: each version moves to the newest release that is at least 4 days old,
+#     its digests are recorded, and the test suite runs.
+#  3. If anything moved, the automation/pins branch is (re)pushed and one PR is opened,
+#     or the open one is refreshed.
+#
+# GitHub does not start other workflows for a PR opened with GITHUB_TOKEN, so the Tests
+# workflow does not run on it by itself; the tests run here instead, before the PR.
+# Close and reopen the PR to get the usual Tests check as well.
+#
+# Needs: Settings → Actions → General → "Allow GitHub Actions to create and approve
+# pull requests".
+
+name: Pins
+
+on:
+  schedule:
+    - cron: "23 6 * * 1"   # Mondays 06:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pins
+  cancel-in-progress: false
+
+jobs:
+  pins:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # push the automation/pins branch
+      pull-requests: write   # open or refresh its PR
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # GitHub API rate limit
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}       # gh CLI
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify the committed pins against upstream
+        run: ./scripts/get-checksums.sh
+
+      - name: Move versions past the 4-day cool-off
+        run: SUMMARY_FILE="$RUNNER_TEMP/summary.md" ./scripts/update-pins.sh
+
+      - name: Record digests for the new versions
+        run: ./scripts/get-checksums.sh --write
+
+      - name: Set up Python 3.15
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+
+      - name: Test
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python3 -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Open or refresh the PR
+        run: |
+          if git diff --quiet -- pins.json; then
+            echo "Every pin is current."
+            exit 0
+          fi
+          branch=automation/pins
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "$branch"
+          git add pins.json
+          { echo "chore(pins): update pinned releases"; echo ""; cat "$RUNNER_TEMP/summary.md"; } > "$RUNNER_TEMP/commit.txt"
+          git commit -F "$RUNNER_TEMP/commit.txt"
+          git push --force origin "$branch"
+          {
+            echo "Releases at least 4 days old, with digests recorded by \`scripts/get-checksums.sh --write\`:"
+            echo ""
+            cat "$RUNNER_TEMP/summary.md"
+            echo ""
+            echo "The test suite passed in the Pins workflow run that opened this PR. Read each"
+            echo "release's notes before merging; merging changes user_data, so the next apply"
+            echo "rebuilds the server."
+          } > "$RUNNER_TEMP/body.md"
+          if [ "$(gh pr view "$branch" --json state -q .state 2>/dev/null || true)" = "OPEN" ]; then
+            gh pr edit "$branch" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr create --base main --head "$branch" \
+              --title "chore(pins): update pinned releases" --body-file "$RUNNER_TEMP/body.md"
+          fi

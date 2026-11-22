@@ -5,7 +5,7 @@ geoip.dat/dlc.dat were checked against a `.sha256sum` fetched from the same muta
 release path as the artifact, which proves transport integrity and nothing else:
 whatever can serve a modified .dat can serve a matching sum. And `releases/latest/`
 floats, so a fixed digest could not even describe it. Both are now pinned to a release
-tag with the digest recorded in variables.tf, matching conduit/xray/alloy.
+tag with the digest recorded in pins.json, matching conduit/xray/alloy.
 
 The verification idiom is extracted from cloud-init.yaml.tpl and executed against a
 stub, so what is asserted is that a tampered artifact actually stops the boot — not
@@ -13,6 +13,7 @@ that a `sha256sum` line is merely present.
 """
 
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -22,7 +23,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CLOUD_INIT = REPO_ROOT / "cloud-init.yaml.tpl"
-VARIABLES = REPO_ROOT / "variables.tf"
+PINS = json.loads((REPO_ROOT / "pins.json").read_text())
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -35,11 +36,13 @@ def uncommented(text: str) -> str:
     return "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
 
 
-def tf_default(path: Path, name: str) -> str:
-    body = path.read_text()
-    block = body[body.index(f'variable "{name}" {{'):]
-    block = block[: block.index("\n}")]
-    return re.search(r'default\s*=\s*"([^"]*)"', block).group(1)
+# Template variable -> its value in pins.json (main.tf wires each one; test_pins holds it to that).
+PIN_VALUES = {
+    "geoip_version": PINS["geoip"]["version"],
+    "geoip_sha256": PINS["geoip"]["sha256"]["geoip.dat"],
+    "geosite_version": PINS["geosite"]["version"],
+    "geosite_sha256": PINS["geosite"]["sha256"]["dlc.dat"],
+}
 
 
 class GeoDataPinTest(unittest.TestCase):
@@ -58,14 +61,14 @@ class GeoDataPinTest(unittest.TestCase):
     def test_recorded_digests_are_real_sha256(self):
         for name in ("geoip_sha256", "geosite_sha256"):
             with self.subTest(variable=name):
-                self.assertRegex(tf_default(VARIABLES, name), SHA256_RE,
+                self.assertRegex(PIN_VALUES[name], SHA256_RE,
                                  f"{name} is not a 64-hex SHA-256 — it verifies nothing")
 
 
 class DigestCheckBehaviourTest(unittest.TestCase):
     """Execute the extracted verification idiom against good and tampered bytes. The
     fragment is rendered the way templatefile() renders it — every ${var} replaced by
-    its variables.tf default — so what runs here is what the node runs. `overrides` lets
+    its pins.json value — so what runs here is what the node runs. `overrides` lets
     a test substitute a different pin, so the accept path is exercised without shipping a
     real geo file: if the check were a no-op, changing the pin would not change the outcome."""
 
@@ -81,7 +84,7 @@ class DigestCheckBehaviourTest(unittest.TestCase):
         values = dict(overrides or {})
 
         def resolve(m):
-            return values.get(m.group(1)) or tf_default(VARIABLES, m.group(1))
+            return values.get(m.group(1)) or PIN_VALUES[m.group(1)]
 
         return re.sub(r"\$\{([a-z0-9_]+)\}", resolve, fragment)
 
@@ -110,7 +113,7 @@ class DigestCheckBehaviourTest(unittest.TestCase):
         fragment = self.geo_fragment()
         for name in ("geoip_sha256", "geosite_sha256"):
             with self.subTest(variable=name):
-                self.assertIn(tf_default(VARIABLES, name), fragment,
+                self.assertIn(PIN_VALUES[name], fragment,
                               f"the rendered fragment does not carry {name}")
 
     def test_an_artifact_matching_the_pin_installs(self):

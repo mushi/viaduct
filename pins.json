@@ -1,0 +1,51 @@
+{
+  "$comment": "Every version and digest the node downloads at boot. Terraform reads this file (pins.tf); scripts/update-pins.sh moves versions, scripts/get-checksums.sh --write records their digests. Each entry: source = GitHub repo, tag_prefix = which release tags count, sha256 = digest per release asset name.",
+  "conduit": {
+    "source": "Psiphon-Inc/conduit",
+    "tag_prefix": "release-cli-",
+    "version": "release-cli-2.1.0",
+    "sha256": {
+      "conduit-linux-amd64": "c7807eab4228ce52baad1f5b8be76c95e89448e2575bed51410c433bec7eb7ca"
+    }
+  },
+  "xray": {
+    "source": "XTLS/Xray-core",
+    "tag_prefix": "v",
+    "version": "v26.11.9",
+    "sha256": {
+      "Xray-linux-64.zip": "b651f7e1d9966ee2c1b1ee1bf8b52c72771824d3065dce96bbc8bcc19ed95f82"
+    }
+  },
+  "xray_exporter": {
+    "source": "compassvpn/xray-exporter",
+    "tag_prefix": "v",
+    "version": "v0.6.9",
+    "sha256": {
+      "xray-exporter-linux-amd64": "68abdbc22edd94275da3af4606a0d6d920ca4ea90e32e1dea24081c38745a52a"
+    }
+  },
+  "alloy": {
+    "source": "grafana/alloy",
+    "tag_prefix": "v",
+    "version": "v1.21.3",
+    "sha256": {
+      "alloy-linux-amd64.zip": "50d23af2d0f98c00beac6ce9a365693e60f87fb76b6cad6fe1d161e80588af6d"
+    }
+  },
+  "geoip": {
+    "source": "v2fly/geoip",
+    "tag_prefix": "",
+    "version": "202611080027",
+    "sha256": {
+      "geoip.dat": "eedb24b3b9fcba27e06b92c0428dab90d9496083091ae4cf39e11387fd99d0e2"
+    }
+  },
+  "geosite": {
+    "source": "v2fly/domain-list-community",
+    "tag_prefix": "",
+    "version": "20261110034535",
+    "sha256": {
+      "dlc.dat": "6cc4decf520dbfd96e1e3750661976eb31d2a5381090b8768cb2ab1528201fcf"
+    }
+  }
+}
