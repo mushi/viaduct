@@ -19,17 +19,17 @@
   "xray_exporter": {
     "source": "compassvpn/xray-exporter",
     "tag_prefix": "v",
-    "version": "v0.6.9",
+    "version": "v0.7.0",
     "sha256": {
-      "xray-exporter-linux-amd64": "68abdbc22edd94275da3af4606a0d6d920ca4ea90e32e1dea24081c38745a52a"
+      "xray-exporter-linux-amd64": "e1cbff5bb12560f546a6991ea6819273bc16263bc3a6428fa7d1be51192db94e"
     }
   },
   "alloy": {
     "source": "grafana/alloy",
     "tag_prefix": "v",
-    "version": "v1.21.3",
+    "version": "v1.22.0",
     "sha256": {
-      "alloy-linux-amd64.zip": "50d23af2d0f98c00beac6ce9a365693e60f87fb76b6cad6fe1d161e80588af6d"
+      "alloy-linux-amd64.zip": "62d177feb18c9b6ffd636c8273aa82a6afc75a507d096ff951749df23c3176f9"
     }
   },
   "geoip": {
@@ -43,9 +43,9 @@
   "geosite": {
     "source": "v2fly/domain-list-community",
     "tag_prefix": "",
-    "version": "20261110034535",
+    "version": "20261124090120",
     "sha256": {
-      "dlc.dat": "6cc4decf520dbfd96e1e3750661976eb31d2a5381090b8768cb2ab1528201fcf"
+      "dlc.dat": "76d5685565ee572e6446130a0512f2bc393c4a5bd7addf2c841e738822d1c565"
     }
   }
 }
